@@ -3,7 +3,7 @@ import mediapipe as mp
 import time
 
 class handDetector():
-    def __init__(self, mode=False, maxHands=2, modelComplexity = 1, detectionCon=0.5, trackCon=0.5):
+    def __init__(self, mode=False, maxHands=2, modelComplexity = 1, detectionCon=0.5, trackCon=0.5): #modelComplexity - accuracy vs speed of landmark detection
         self.mode = mode
         self.maxHands = maxHands
         self.modelComplexity = modelComplexity
@@ -17,23 +17,32 @@ class handDetector():
 
     def findHands(self, img, draw=True):
         imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(imgRGB)
+        self.results = self.hands.process(imgRGB)
         #print(results.multi_hand_landmarks) #prints the landmarks (x,y,z) of the detected hands
 
-        if results.multi_hand_landmarks:
+        if self.results.multi_hand_landmarks:
             for handLms in results.multi_hand_landmarks:
                 if draw:
                     self.mpDraw.draw_landmarks(img, handLms, self.mpHands.HAND_CONNECTIONS)  # draw landmarks on the image        
 
         return img
     
-                # for id, lm in enumerate(handLms.landmark): #enumerate gives index and landmark
-                # #print(id, lm) #prints the index and landmark coordinates
-                # h, w, c = img.shape #get height, width, and channels of the image
-                # cx, cy = int(lm.x * w), int(lm.y * h) #calculate the center of the landmark in pixel coordinates
-                # #print(id, cx, cy) #print the index and pixel coordinates
-                # if id == 0: #if the landmark is the wrist
-                #     cv2.circle(img, (cx, cy), 15, (255, 0, 255), cv2.FILLED) #draw a filled circle at the wrist landmark
+    def findPosition(self, img, handNo=0, draw=True):
+
+        lmList = [] #list to store landmark positions
+        if self.results.multi_hand_landmarks:
+            myHand = self.results.multi_hand_landmarks[handNo] #get the landmarks of the specified hand
+
+            for id, lm in enumerate(handLms.landmark): #enumerate gives index and landmark
+                #print(id, lm) #prints the index and landmark coordinates
+                h, w, c = img.shape #get height, width, and channels of the image
+                cx, cy = int(lm.x * w), int(lm.y * h) #calculate the center of the landmark in pixel coordinates
+                #print(id, cx, cy) 
+                lmList.append([id, cx, cy]) #append the landmark id and coordinates to the list
+                if draw: 
+                    cv2.circle(img, (cx, cy), 15, (255, 0, 255), cv2.FILLED) #draw a filled circle at the wrist landmark
+
+        return lmList
     
 
 
@@ -47,6 +56,9 @@ def main():
     while True:
         success, img = cap.read()
         img = detector.findHands(img)
+        lmList = detector.findPosition(img)
+        if len(lmList) != 0:
+            print(lmList[4])  # print the list of landmark positions
 
         cTime = time.time()
         fps = 1 / (cTime - pTime) #calculate frames per second
