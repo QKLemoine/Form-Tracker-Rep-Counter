@@ -21,7 +21,7 @@ class handDetector():
         #print(results.multi_hand_landmarks) #prints the landmarks (x,y,z) of the detected hands
 
         if self.results.multi_hand_landmarks:
-            for handLms in results.multi_hand_landmarks:
+            for handLms in self.results.multi_hand_landmarks:
                 if draw:
                     self.mpDraw.draw_landmarks(img, handLms, self.mpHands.HAND_CONNECTIONS)  # draw landmarks on the image        
 
@@ -33,7 +33,7 @@ class handDetector():
         if self.results.multi_hand_landmarks:
             myHand = self.results.multi_hand_landmarks[handNo] #get the landmarks of the specified hand
 
-            for id, lm in enumerate(handLms.landmark): #enumerate gives index and landmark
+            for id, lm in enumerate(self.handLms.landmark): #enumerate gives index and landmark
                 #print(id, lm) #prints the index and landmark coordinates
                 h, w, c = img.shape #get height, width, and channels of the image
                 cx, cy = int(lm.x * w), int(lm.y * h) #calculate the center of the landmark in pixel coordinates
