@@ -20,4 +20,4 @@ while True:
             mpDraw.draw_landmarks(img, handLms, mpHands.HAND_CONNECTIONS)# draw landmarks on the image
     
     cv2.imshow("Image", img)
-    cv2.waitKey(1) #delay in milliseconds for camera
+    cv2.waitKey(1) #delay in milliseconds for camera feed
