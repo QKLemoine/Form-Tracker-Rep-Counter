@@ -16,4 +16,4 @@ while True:
     results = hands.process(imgRGB)
     
     cv2.imshow("Image", img)
-    cv2.waitKey(0)
+    cv2.waitKey(1)
