@@ -10,11 +10,16 @@ detector = pm.poseDetector()
 
 while True:
     success, img = cap.read()
-    img = detector.findPose(img)
+    img = detector.findPose(img,False)
     lmList = detector.getPosition(img, False)
 
     if len(lmList) != 0:
-        pass
+        #Right Arm
+        detector.findAngle(img,12,14,16)
+
+         #Left Arm
+        detector.findAngle(img,11,13,15)
+
 
 
     cv2.imshow("Image", img)
