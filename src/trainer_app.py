@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import time
-import AITrainer.PoseEstimationModule as pm
+from core import PoseEstimationModule as pm
 
 cap = cv2.VideoCapture(0)
 
