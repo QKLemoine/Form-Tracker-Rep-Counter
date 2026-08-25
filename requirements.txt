@@ -1,0 +1,5 @@
+opencv-python>=4.11
+mediapipe>=0.10
+numpy>=2.2
+fastdtw>=0.3
+scipy>=1.16
