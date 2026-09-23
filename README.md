@@ -16,6 +16,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 - **`/src/trainer_app.py`**: The main execution node that bridges the vision pipeline, scoring logic, and UI rendering.
 - **`/legacy/`**: Original tutorial scripts and early experimental monolithic code.
 - **`/tests/`**: Unit tests for the analytics layer.
+- **`pyproject.toml`**: Packaging config — makes `src` an installable package (`pip install -e .`) and defines the `form-trainer` console script.
 
 ## Current Features
 
@@ -27,16 +28,18 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 ## How to Run
 
 1. Clone the repository and navigate to the root folder.
-2. Create a virtual environment and install the dependencies:
+2. Create a virtual environment and install the app (editable install, so code changes take effect immediately):
    ```bash
    python3 -m venv venv
    source venv/bin/activate
    pip install -r requirements.txt
    ```
-3. The app currently has to be run from inside `src/` (it isn't packaged yet, so its `core`/`analytics` imports only resolve from there):
+   This installs the pinned dependencies and the app itself in editable mode (`requirements.txt` includes `-e .`).
+3. Run it from the repo root, either via the console script or as a module:
    ```bash
-   cd src
-   python trainer_app.py
+   form-trainer
+   # or
+   python -m src.trainer_app
    ```
 4. Controls:
    - `g` — start/stop recording a "golden" rep (the reference form to score against).
@@ -44,7 +47,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 
 ### CLI flags
 
-All flags are optional; run `python trainer_app.py --help` to see them from the app itself.
+All flags are optional; run `form-trainer --help` to see them from the app itself.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -56,12 +59,12 @@ All flags are optional; run `python trainer_app.py --help` to see them from the 
 
 Example — run against a recorded clip instead of a webcam:
 ```bash
-python trainer_app.py --video path/to/clip.mp4
+form-trainer --video path/to/clip.mp4
 ```
 
 Example — track squats instead of the default bicep curl:
 ```bash
-python trainer_app.py --exercise squat
+form-trainer --exercise squat
 ```
 
 ## Exercises
@@ -71,7 +74,7 @@ Exercises are defined in `src/exercises.py` as a small registry: each entry name
 - **`bicep_curl`** (default) — tracks the right shoulder/elbow/wrist angle. Angle range `210 310` was tuned against an actual recorded curl.
 - **`squat`** — tracks the right hip/knee/ankle angle. **Experimental and uncalibrated**: the `90 170` angle range in the registry is a placeholder, not tuned against real reps, and squats need a side-on camera angle for the hip/knee/ankle triple to read correctly (the front-on framing that works for `bicep_curl` won't). Use `--angle-range` to override it until the registry default is calibrated.
 
-Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by default — see below), so recording a golden squat rep won't overwrite a recorded bicep curl rep.
+Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by default — see below), so recording a golden squat rep won't overwrite a recorded bicep curl rep. That path is relative to wherever you run the app from — e.g. `<repo root>/golden_reps/` when run via `form-trainer` from the repo root.
 
 ## How It Works: Golden Rep Scoring
 
