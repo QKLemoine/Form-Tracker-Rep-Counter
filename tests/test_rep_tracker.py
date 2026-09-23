@@ -122,6 +122,19 @@ def test_save_golden_rep_is_a_noop_when_nothing_saved(tracker, tmp_path):
     assert not path.exists()
 
 
+def test_save_golden_rep_creates_missing_parent_directories(tracker, evaluator, tmp_path):
+    path = tmp_path / "golden_reps" / "squat.npy"
+
+    tracker.toggle_golden_recording()
+    tracker.update(per=10, frame_coords=FRAME)
+    tracker.toggle_golden_recording()
+    tracker.save_golden_rep(path)
+
+    assert path.exists()
+    loaded = RepTracker(evaluator)
+    assert loaded.load_golden_rep(path) is True
+
+
 def test_load_golden_rep_missing_file_returns_false(tracker, tmp_path):
     path = tmp_path / "does_not_exist.npy"
     assert tracker.load_golden_rep(path) is False

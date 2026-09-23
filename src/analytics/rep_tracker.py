@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 
 
@@ -33,6 +35,8 @@ class RepTracker:
         no golden rep has been saved yet."""
         if not self.golden_rep_saved:
             return
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         np.save(path, np.array(self.golden_rep_frames))
 
     def load_golden_rep(self, path):
