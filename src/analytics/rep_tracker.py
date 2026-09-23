@@ -1,3 +1,6 @@
+import numpy as np
+
+
 class RepTracker:
     """Tracks rep count and golden/live rep buffers from a stream of per-frame
     joint-angle percentages, independent of any camera or drawing code."""
@@ -24,6 +27,30 @@ class RepTracker:
             self.live_rep_frames = []
 
         return self.is_recording_golden
+
+    def save_golden_rep(self, path):
+        """Persist the current golden rep to `path` as a .npy file. No-op if
+        no golden rep has been saved yet."""
+        if not self.golden_rep_saved:
+            return
+        np.save(path, np.array(self.golden_rep_frames))
+
+    def load_golden_rep(self, path):
+        """Load a previously saved golden rep from `path`, if present and
+        valid, replacing whatever golden rep is currently held. Returns True
+        on success, False if the file is missing, unreadable, or not a
+        well-formed rep (never raises)."""
+        try:
+            frames = np.load(path)
+        except (OSError, ValueError, EOFError):
+            return False
+
+        if frames.ndim != 3 or frames.shape[0] == 0:
+            return False
+
+        self.golden_rep_frames = list(frames)
+        self.golden_rep_saved = True
+        return True
 
     def update(self, per, frame_coords):
         """Advance the state machine by one frame.

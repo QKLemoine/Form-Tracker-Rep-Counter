@@ -16,6 +16,8 @@ def parse_args():
     parser.add_argument("--angle-range", type=float, nargs=2, default=[210, 310],
                          metavar=("MIN", "MAX"),
                          help="Angle range (degrees) mapped to 0-100%% of the rep (default: 210 310).")
+    parser.add_argument("--golden-rep-path", type=str, default="golden_rep.npy",
+                         help="Path to save/load the golden rep (default: golden_rep.npy).")
     return parser.parse_args()
 
 
@@ -30,6 +32,10 @@ def main():
 
     detector = pm.poseDetector()
     tracker = RepTracker(FormEvaluator())
+
+    if tracker.load_golden_rep(args.golden_rep_path):
+        print(f"Loaded golden rep from {args.golden_rep_path} "
+              f"({len(tracker.golden_rep_frames)} frames).")
 
     while True:
         success, img = cap.read()
@@ -74,7 +80,9 @@ def main():
         if key == ord('g'):
             recording = tracker.toggle_golden_recording()
             if not recording and tracker.golden_rep_saved:
-                print(f"Golden rep saved: {len(tracker.golden_rep_frames)} frames.")
+                tracker.save_golden_rep(args.golden_rep_path)
+                print(f"Golden rep saved to {args.golden_rep_path} "
+                      f"({len(tracker.golden_rep_frames)} frames).")
         elif key == ord('q'):
             break
 

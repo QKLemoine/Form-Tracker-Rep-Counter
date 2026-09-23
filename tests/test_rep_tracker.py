@@ -97,3 +97,54 @@ def test_no_scoring_without_golden_rep(tracker, evaluator):
     tracker.update(per=0, frame_coords=FRAME)
     assert len(evaluator.calls) == 0
     assert tracker.last_score == 0.0
+
+
+def test_save_golden_rep_round_trips(tracker, evaluator, tmp_path):
+    path = tmp_path / "golden_rep.npy"
+
+    tracker.toggle_golden_recording()
+    tracker.update(per=10, frame_coords=np.full((33, 2), 1.0))
+    tracker.update(per=20, frame_coords=np.full((33, 2), 2.0))
+    tracker.toggle_golden_recording()
+    tracker.save_golden_rep(path)
+
+    loaded = RepTracker(evaluator)
+    assert loaded.load_golden_rep(path) is True
+    assert loaded.golden_rep_saved is True
+    assert len(loaded.golden_rep_frames) == 2
+    np.testing.assert_array_equal(loaded.golden_rep_frames[0], np.full((33, 2), 1.0))
+    np.testing.assert_array_equal(loaded.golden_rep_frames[1], np.full((33, 2), 2.0))
+
+
+def test_save_golden_rep_is_a_noop_when_nothing_saved(tracker, tmp_path):
+    path = tmp_path / "golden_rep.npy"
+    tracker.save_golden_rep(path)
+    assert not path.exists()
+
+
+def test_load_golden_rep_missing_file_returns_false(tracker, tmp_path):
+    path = tmp_path / "does_not_exist.npy"
+    assert tracker.load_golden_rep(path) is False
+    assert tracker.golden_rep_saved is False
+    assert tracker.golden_rep_frames == []
+
+
+def test_load_golden_rep_corrupt_file_returns_false(tracker, tmp_path):
+    path = tmp_path / "corrupt.npy"
+    path.write_bytes(b"not a valid npy file")
+
+    assert tracker.load_golden_rep(path) is False
+    assert tracker.golden_rep_saved is False
+    assert tracker.golden_rep_frames == []
+
+
+def test_load_golden_rep_does_not_clobber_existing_state_on_failure(tracker, tmp_path):
+    tracker.toggle_golden_recording()
+    tracker.update(per=10, frame_coords=FRAME)
+    tracker.toggle_golden_recording()
+    original_frames = tracker.golden_rep_frames
+
+    path = tmp_path / "does_not_exist.npy"
+    assert tracker.load_golden_rep(path) is False
+    assert tracker.golden_rep_saved is True
+    assert tracker.golden_rep_frames is original_frames
