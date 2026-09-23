@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "form-tracker-rep-counter"
+version = "0.1.0"
+description = "Biomechanical form tracker & rep counter using MediaPipe pose estimation."
+requires-python = ">=3.11"
+dependencies = [
+    "opencv-python>=4.11",
+    "mediapipe>=0.10",
+    "numpy>=2.2",
+    "fastdtw>=0.3",
+    "scipy>=1.16",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+form-trainer = "src.trainer_app:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

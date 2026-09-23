@@ -2,8 +2,8 @@ import sys
 
 import pytest
 
-import trainer_app
-from exercises import EXERCISES
+from src import trainer_app
+from src.exercises import EXERCISES
 
 
 def test_main_exits_cleanly_for_unopenable_video_source(tmp_path, monkeypatch, capsys):

@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from exercises import EXERCISES, Exercise
+from src.exercises import EXERCISES, Exercise
 
 
 def test_registry_is_nonempty():

@@ -3,10 +3,10 @@ import sys
 
 import cv2
 import numpy as np
-from core import PoseEstimationModule as pm
-from analytics.form_scoring import FormEvaluator
-from analytics.rep_tracker import RepTracker
-from exercises import EXERCISES
+from src.core import PoseEstimationModule as pm
+from src.analytics.form_scoring import FormEvaluator
+from src.analytics.rep_tracker import RepTracker
+from src.exercises import EXERCISES
 
 
 def parse_args(argv=None):

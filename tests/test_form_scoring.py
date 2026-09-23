@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from analytics.form_scoring import FormEvaluator
+from src.analytics.form_scoring import FormEvaluator
 
 NUM_JOINTS = 33  # MediaPipe Pose landmark count
 ROOT_IDX = 23     # left hip

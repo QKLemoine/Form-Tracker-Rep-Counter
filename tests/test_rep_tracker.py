@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from analytics.rep_tracker import RepTracker
+from src.analytics.rep_tracker import RepTracker
 
 
 class FakeEvaluator:
