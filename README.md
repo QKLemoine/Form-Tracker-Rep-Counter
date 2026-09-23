@@ -21,10 +21,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 - Real-time pose estimation and skeletal landmark extraction via MediaPipe.
 - Biomechanical angle calculation (e.g., elbow and shoulder joint angles).
 - State-machine-based repetition counting and set progression tracking.
-
-## Upcoming Features (In Development)
-
-- **Dynamic Time Warping (DTW):** Implementing time-series sequence alignment to compare live repetitions against a "golden" ideal repetition, calculating a normalized form-error score regardless of rep speed.
+- **Dynamic Time Warping (DTW) form scoring:** compares live repetitions against a recorded "golden" ideal repetition, calculating a normalized form-error score regardless of rep speed. See [How It Works](#how-it-works-golden-rep-scoring) below.
 
 ## How to Run
 
@@ -35,7 +32,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
    source venv/bin/activate
    pip install -r requirements.txt
    ```
-3. Run the trainer app from the `src` directory:
+3. The app currently has to be run from inside `src/` (it isn't packaged yet, so its `core`/`analytics` imports only resolve from there):
    ```bash
    cd src
    python trainer_app.py
@@ -43,6 +40,28 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 4. Controls:
    - `g` — start/stop recording a "golden" rep (the reference form to score against).
    - `q` — quit.
+
+### CLI flags
+
+All flags are optional; run `python trainer_app.py --help` to see them from the app itself.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--camera CAMERA` | `0` | Camera device index to use. Ignored if `--video` is given. |
+| `--video VIDEO` | *(none)* | Path to a video file to use instead of a live camera. |
+| `--angle-range MIN MAX` | `210 310` | Angle range (degrees) mapped to 0-100% of the rep. |
+| `--golden-rep-path GOLDEN_REP_PATH` | `golden_rep.npy` | Path to save/load the golden rep. |
+
+Example — run against a recorded clip instead of a webcam:
+```bash
+python trainer_app.py --video path/to/clip.mp4
+```
+
+## How It Works: Golden Rep Scoring
+
+1. Press `g` to start recording a "golden" rep — the reference form you want later reps scored against. Perform one rep, then press `g` again to stop; the recorded frames are locked in as the golden rep and saved to disk at `--golden-rep-path` (`golden_rep.npy` by default).
+2. From then on, every completed rep is compared against the golden rep using Dynamic Time Warping (`FormEvaluator` in `src/analytics/form_scoring.py`), and a form score is drawn on screen.
+3. On the next run, the app automatically loads the golden rep from `--golden-rep-path` at startup (if the file exists), so you don't need to re-record it every session. If the file is missing or unreadable, the app just starts without a golden rep, as if none had been recorded yet.
 
 ## Testing
 
