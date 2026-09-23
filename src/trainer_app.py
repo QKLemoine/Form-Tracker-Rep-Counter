@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import cv2
 import numpy as np
@@ -28,7 +29,8 @@ def main():
     source = args.video if args.video else args.camera
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open video source: {source!r}")
+        print(f"Error: could not open video source {source!r}", file=sys.stderr)
+        sys.exit(1)
 
     detector = pm.poseDetector()
     tracker = RepTracker(FormEvaluator())
