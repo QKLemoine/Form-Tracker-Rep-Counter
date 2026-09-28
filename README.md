@@ -10,7 +10,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 
 ## Repository Structure
 
-- **`/src/core/`**: Contains the decoupled tracking engines (`HandTrackingModule`, `PoseEstimationModule`) responsible for reading frames and extracting normalized $(x,y)$ skeletal coordinates.
+- **`/src/core/`**: Contains the pose tracking engine (`PoseEstimationModule`), responsible for reading frames and extracting normalized $(x,y)$ skeletal coordinates. (`HandTrackingModule` is unused and still on the legacy `mp.solutions` API, which mediapipe 1.x removed, so it no longer runs.)
 - **`/src/analytics/`**: Houses the mathematical models for evaluating movement quality — DTW-based form scoring (`form_scoring.py`) and the camera-independent rep-counting state machine (`rep_tracker.py`).
 - **`/src/exercises.py`**: The exercise registry — each exercise defines its tracked joint triple, angle range, and display label. See [Exercises](#exercises) below.
 - **`/src/trainer_app.py`**: The main execution node that bridges the vision pipeline, scoring logic, and UI rendering.
@@ -20,7 +20,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 
 ## Current Features
 
-- Real-time pose estimation and skeletal landmark extraction via MediaPipe.
+- Real-time pose estimation and skeletal landmark extraction via MediaPipe's Pose Landmarker (Tasks API, mediapipe 1.x).
 - Biomechanical angle calculation (e.g., elbow and shoulder joint angles).
 - State-machine-based repetition counting and set progression tracking.
 - **Dynamic Time Warping (DTW) form scoring:** compares live repetitions against a recorded "golden" ideal repetition, calculating a normalized form-error score regardless of rep speed. See [How It Works](#how-it-works-golden-rep-scoring) below.
@@ -41,6 +41,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
    # or
    python -m src.trainer_app
    ```
+   The first run needs an internet connection: it downloads MediaPipe's pose model (~9 MB) to `~/.cache/form-trainer/` (or `$XDG_CACHE_HOME/form-trainer/`). Later runs reuse the cached copy and work offline.
 4. Controls:
    - `g` — start/stop recording a "golden" rep (the reference form to score against).
    - `q` — quit.
@@ -90,3 +91,5 @@ Install dev dependencies and run the test suite from the repo root:
 pip install -r requirements-dev.txt
 pytest
 ```
+
+The pose-estimation smoke test loads the real model, so the first test run also needs internet to download it (see [How to Run](#how-to-run)).
