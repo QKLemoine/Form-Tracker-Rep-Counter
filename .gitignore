@@ -14,3 +14,6 @@ build/
 .pytest_cache/
 *.npy
 videos/
+web/node_modules/
+web/dist/
+web/public/mediapipe-wasm/

@@ -1,0 +1,94 @@
+:root {
+  --bg: #111418;
+  --fg: #e8eaed;
+  --muted: #9aa0a6;
+  --accent: #4cc38a;
+  --button: #2a2f36;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.stage {
+  position: relative;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.stage[hidden] {
+  display: none;
+}
+
+/* The front camera is shown mirrored, like a selfie view. */
+.stage.mirrored {
+  transform: scaleX(-1);
+}
+
+.stage video,
+.stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  min-height: 1.5em;
+}
+
+.status.error {
+  color: #f28b82;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--button);
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 20px;
+  min-height: 44px;
+}
+
+button#start {
+  background: var(--accent);
+  color: #0b1a12;
+}
+
+button:disabled {
+  opacity: 0.4;
+}

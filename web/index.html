@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#111418" />
+    <title>Form Trainer</title>
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Form Trainer</h1>
+      <div id="stage" class="stage" hidden>
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <p id="status" class="status" role="status">Tap Start to turn on the camera. Video stays on this device.</p>
+      <div class="controls">
+        <button id="start" type="button">Start camera</button>
+        <button id="flip" type="button" disabled>Flip camera</button>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
