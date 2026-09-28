@@ -55,7 +55,7 @@ All flags are optional; run `form-trainer --help` to see them from the app itsel
 | `--camera CAMERA` | `0` | Camera device index to use. Ignored if `--video` is given. |
 | `--video VIDEO` | *(none)* | Path to a video file to use instead of a live camera. |
 | `--exercise {bicep_curl,squat}` | `bicep_curl` | Exercise to track. See [Exercises](#exercises) below. |
-| `--angle-range MIN MAX` | *(exercise's default)* | Overrides the selected exercise's angle range (degrees mapped to 0-100% of the rep). |
+| `--angle-range START END` | *(exercise's default)* | Overrides the selected exercise's angle range: the joint angle at rest (0% of the rep) and at the peak (100%). See [Exercises](#exercises). |
 | `--golden-rep-path GOLDEN_REP_PATH` | `golden_reps/<exercise>.npy` | Overrides where the golden rep is saved/loaded for the selected exercise. |
 
 Example — run against a recorded clip instead of a webcam:
@@ -72,15 +72,17 @@ form-trainer --exercise squat
 
 Exercises are defined in `src/exercises.py` as a small registry: each entry names the three MediaPipe Pose landmarks that form the tracked joint angle, the angle range mapped to 0-100% of a rep, and a display label shown on screen.
 
-- **`bicep_curl`** (default) — tracks the right shoulder/elbow/wrist angle. Angle range `210 310` was tuned against an actual recorded curl.
-- **`squat`** — tracks the right hip/knee/ankle angle. **Experimental and uncalibrated**: the `90 170` angle range in the registry is a placeholder, not tuned against real reps, and squats need a side-on camera angle for the hip/knee/ankle triple to read correctly (the front-on framing that works for `bicep_curl` won't). Use `--angle-range` to override it until the registry default is calibrated.
+Angles are the **interior joint angle in degrees (0–180)**: 180 is a straight limb, smaller is more bent. Because it's unsigned, a joint reads the same whichever side of your body faces the camera. An angle range is written `START END`: `START` is the angle at rest (0% of the rep) and `END` the angle at the peak (100%). Either can be larger — a curl closes the elbow, so its range runs downward. A rep counts when the angle goes from `START` to `END` and back.
+
+- **`bicep_curl`** (default) — tracks the right shoulder/elbow/wrist angle. Range `150 50`: arm extended past 150° is the bottom, curled under 50° is the top. Works filmed from the front or side-on, as long as the right arm is visible.
+- **`squat`** — tracks the right hip/knee/ankle angle. **Experimental and uncalibrated**: the `170 90` range (standing → bottom) in the registry is a placeholder, not tuned against real reps, and squats need a side-on camera angle for the hip/knee/ankle triple to read correctly (from the front, knee bend is foreshortened). Use `--angle-range` to override it until the registry default is calibrated.
 
 Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by default — see below), so recording a golden squat rep won't overwrite a recorded bicep curl rep. That path is relative to wherever you run the app from — e.g. `<repo root>/golden_reps/` when run via `form-trainer` from the repo root.
 
 ## How It Works: Golden Rep Scoring
 
 1. Press `g` to start recording a "golden" rep — the reference form you want later reps scored against. Perform one rep, then press `g` again to stop; the recorded frames are locked in as the golden rep and saved to disk at `--golden-rep-path` (`golden_reps/<exercise>.npy` by default).
-2. From then on, every completed rep is compared against the golden rep using Dynamic Time Warping (`FormEvaluator` in `src/analytics/form_scoring.py`), and a form score is drawn on screen.
+2. From then on, every completed rep is compared against the golden rep using Dynamic Time Warping (`FormEvaluator` in `src/analytics/form_scoring.py`), and a form score is drawn on screen. Lower is better, but it won't reach 0: landmark tracking jitters from frame to frame, so even the same footage replayed scores around 0.25–0.3. Live reps are only buffered from the moment the movement starts, so press `g` as close to the start and end of the golden rep as you can — extra rest frames in the golden rep inflate every score.
 3. On the next run, the app automatically loads the golden rep from `--golden-rep-path` at startup (if the file exists), so you don't need to re-record it every session. If the file is missing or unreadable, the app just starts without a golden rep, as if none had been recorded yet.
 
 ## Testing
