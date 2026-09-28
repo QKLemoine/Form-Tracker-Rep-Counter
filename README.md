@@ -16,6 +16,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 - **`/src/trainer_app.py`**: The main execution node that bridges the vision pipeline, scoring logic, and UI rendering.
 - **`/legacy/`**: Original tutorial scripts and early experimental monolithic code.
 - **`/tests/`**: Unit tests for the analytics layer.
+- **`/web/`**: The phone/browser version of the app (Vite + TypeScript). See [Phone / Web App](#phone--web-app).
 - **`pyproject.toml`**: Packaging config — makes `src` an installable package (`pip install -e .`) and defines the `form-trainer` console script.
 
 ## Current Features
@@ -86,6 +87,24 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 1. Press `g` to start recording a "golden" rep — the reference form you want later reps scored against. Perform one rep, then press `g` again to stop; the recorded frames are locked in as the golden rep and saved to disk at `--golden-rep-path` (`golden_reps/<exercise>.npy` by default).
 2. From then on, every completed rep is compared against the golden rep using Dynamic Time Warping (`FormEvaluator` in `src/analytics/form_scoring.py`), and a form score is drawn on screen. Lower is better, but it won't reach 0: landmark tracking jitters from frame to frame, so even the same footage replayed scores around 0.25–0.3. Live reps are only buffered from the moment the movement starts, so press `g` as close to the start and end of the golden rep as you can — extra rest frames in the golden rep inflate every score.
 3. On the next run, the app automatically loads the golden rep from `--golden-rep-path` at startup (if the file exists), so you don't need to re-record it every session. If the file is missing or unreadable, the app just starts without a golden rep, as if none had been recorded yet.
+
+## Phone / Web App
+
+`web/` is a browser version that runs on phones (iPhone Safari, Android Chrome) with no app install. Pose tracking runs entirely on the device via MediaPipe's web Pose Landmarker — video is never uploaded anywhere.
+
+**Status:** live camera and skeleton tracking work. Rep counting and golden-rep scoring are being ported from the Python app next.
+
+Once deployed, it's served from GitHub Pages at `https://qklemoine.github.io/Form-Tracker-Rep-Counter/` (deployed by `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`).
+
+To run it locally and open it on your phone:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open the `Network:` URL it prints (e.g. `https://192.168.x.x:5173/`) on a phone on the same Wi-Fi. Phones only allow camera access over HTTPS, so the dev server uses a self-signed certificate: accept the browser's certificate warning once to continue.
 
 ## Testing
 
