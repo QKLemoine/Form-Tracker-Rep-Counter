@@ -26,6 +26,24 @@ def test_detector_tolerates_non_increasing_timestamps(detector):
     detector.findPose(blank, draw=False, timestamp_ms=5_000)
 
 
+@pytest.mark.parametrize("p1, p2, p3, expected", [
+    ((0, -1), (0, 0), (1, 0), 90),    # right angle
+    ((0, -1), (0, 0), (0, 1), 180),   # straight limb
+    ((1, 1), (0, 0), (1, 0), 45),
+])
+def test_joint_angle_is_interior(p1, p2, p3, expected):
+    assert pm.joint_angle(p1, p2, p3) == pytest.approx(expected)
+
+
+def test_joint_angle_is_the_same_for_a_mirrored_view():
+    # The same elbow seen from the other side is mirrored left-right; the
+    # interior angle must not change (the old signed angle read 360 - x).
+    shoulder, elbow, wrist = (0, -10), (0, 0), (7, 5)
+    mirror = lambda p: (-p[0], p[1])
+    assert pm.joint_angle(shoulder, elbow, wrist) == pytest.approx(
+        pm.joint_angle(mirror(shoulder), mirror(elbow), mirror(wrist)))
+
+
 def test_ensure_model_reuses_cached_file(tmp_path, monkeypatch):
     cached = tmp_path / "pose_landmarker_full.task"
     cached.write_bytes(b"model")

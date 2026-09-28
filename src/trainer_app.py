@@ -6,7 +6,7 @@ import numpy as np
 from src.core import PoseEstimationModule as pm
 from src.analytics.form_scoring import FormEvaluator
 from src.analytics.rep_tracker import RepTracker
-from src.exercises import EXERCISES
+from src.exercises import EXERCISES, angle_to_percent
 
 
 def parse_args(argv=None):
@@ -18,9 +18,10 @@ def parse_args(argv=None):
     parser.add_argument("--exercise", type=str, default="bicep_curl", choices=sorted(EXERCISES),
                          help="Exercise to track (default: bicep_curl).")
     parser.add_argument("--angle-range", type=float, nargs=2, default=None,
-                         metavar=("MIN", "MAX"),
-                         help="Override the exercise's default angle range "
-                              "(degrees mapped to 0-100%% of the rep).")
+                         metavar=("START", "END"),
+                         help="Override the exercise's angle range: interior joint angle "
+                              "(0-180) at rest (0%% of the rep) and at the peak (100%%). "
+                              "START may be larger than END.")
     parser.add_argument("--golden-rep-path", type=str, default=None,
                          help="Path to save/load the golden rep "
                               "(default: golden_reps/<exercise>.npy).")
@@ -75,8 +76,8 @@ def main():
             current_frame_coords = np.array([[lm[1], lm[2]] for lm in lmList])
 
             angle = detector.findAngle(img, *exercise.joints)
-            per = np.interp(angle, angle_range, (0, 100))
-            bar = np.interp(angle, angle_range, (650, 100))
+            per = angle_to_percent(angle, angle_range)
+            bar = np.interp(per, (0, 100), (650, 100))
 
             tracker.update(per, current_frame_coords)
 

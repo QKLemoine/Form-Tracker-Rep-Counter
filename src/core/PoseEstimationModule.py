@@ -36,6 +36,14 @@ class ModelDownloadError(RuntimeError):
     pass
 
 
+def joint_angle(p1, p2, p3):
+    """Interior angle in degrees (0-180) at p2 between the segments to p1 and
+    p3. Unsigned, so a limb reads the same whichever side faces the camera."""
+    angle = abs(math.degrees(math.atan2(p3[1] - p2[1], p3[0] - p2[0])
+                             - math.atan2(p1[1] - p2[1], p1[0] - p2[0])))
+    return 360 - angle if angle > 180 else angle
+
+
 def _download(url, dest):
     # certifi's CA bundle, because python.org macOS builds don't use the system
     # certificate store and would otherwise fail HTTPS verification.
@@ -132,12 +140,7 @@ class poseDetector:
         x2, y2 = self.lmList[p2][1:]
         x3, y3 = self.lmList[p3][1:]
 
-        #Calculate the angle
-        angle = math.degrees(math.atan2(y3-y2,x3-x2) -
-                             math.atan2(y1-y2,x1-x2))
-
-        if angle < 0:
-             angle += 360
+        angle = joint_angle((x1, y1), (x2, y2), (x3, y3))
 
         #Draw
         if draw:
