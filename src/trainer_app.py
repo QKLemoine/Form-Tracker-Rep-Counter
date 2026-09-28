@@ -49,7 +49,12 @@ def main():
         print(f"Error: could not open video source {source!r}", file=sys.stderr)
         sys.exit(1)
 
-    detector = pm.poseDetector()
+    try:
+        detector = pm.poseDetector()
+    except pm.ModelDownloadError as e:
+        cap.release()
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     tracker = RepTracker(FormEvaluator())
 
     if tracker.load_golden_rep(golden_rep_path):
@@ -61,7 +66,8 @@ def main():
         if not success:
             break
 
-        img = detector.findPose(img, False)
+        timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC) if args.video else None
+        img = detector.findPose(img, False, timestamp_ms=timestamp_ms)
         lmList = detector.getPosition(img, False)
 
         if len(lmList) != 0:
@@ -106,6 +112,7 @@ def main():
             break
 
     cap.release()
+    detector.close()
     cv2.destroyAllWindows()
 
 
