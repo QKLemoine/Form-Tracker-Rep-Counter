@@ -35,6 +35,8 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
    pip install -r requirements.txt
    ```
    This installs the pinned dependencies and the app itself in editable mode (`requirements.txt` includes `-e .`).
+
+   On Linux, mediapipe also needs the system EGL/GLES libraries. On Ubuntu/Debian: `sudo apt-get install libegl1 libgles2`. (macOS needs nothing extra.)
 3. Run it from the repo root, either via the console script or as a module:
    ```bash
    form-trainer

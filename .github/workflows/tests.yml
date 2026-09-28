@@ -19,6 +19,10 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements-dev.txt
 
+      # mediapipe's Linux native library links against EGL and GLES even on the CPU path.
+      - name: Install system libraries for mediapipe
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgles2
+
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
