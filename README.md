@@ -94,7 +94,7 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 
 **Status:** tracking, rep counting, golden-rep recording and form scoring all work, with the same exercises as the Python app (`web/src/exercises.ts` is the web counterpart of `src/exercises.py`). Pick the exercise from the menu under the video; switching exercise resets the counts.
 
-**Rep progress is measured in 3D.** The desktop app measures the joint angle in the flat image, which closes too early when a limb swings toward the camera (a curl filmed from the front). The web app uses the angle between MediaPipe's estimated 3D joint positions instead, so it reads the same from the front as from the side. That estimate is good to roughly ±10°, so the web angle ranges carry extra margin and differ from the desktop ones: bicep curl is `150 70` here against `150 50` on desktop.
+**Rep progress is measured in 3D.** The desktop app measures the joint angle in the flat image, which closes too early when a limb swings toward the camera (a curl filmed from the front). The web app uses the angle between MediaPipe's estimated 3D joint positions instead, so it reads the same from the front as from the side. That estimate is imperfect, especially for depth: a full curl reads about 50–60° at the top filmed side-on but only about 82° filmed from the front. So the web angle ranges carry extra margin and differ from the desktop ones: bicep curl is `150 90` here against `150 50` on desktop, which means a curl that stops with the forearm level still counts as a full rep.
 
 Unlike the desktop app, which measures the right side only, the web app also tracks **both sides at once**:
 

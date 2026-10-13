@@ -52,9 +52,10 @@ export const EXERCISES: Record<string, Exercise> = {
     name: "bicep_curl",
     label: "Bicep Curl",
     joints: { left: [11, 13, 15], right: [12, 14, 16] }, // shoulder, elbow, wrist
-    // The 3D estimate is good to about +/-10 degrees: the same full curl bottomed out at 49 in one
-    // clip and 59 in its mirror image. The peak is set at 70 so a full curl reliably reaches it.
-    angleRange: [150, 70],
+    // The 3D estimate under-reads depth: a full curl bottoms out around 50-60 degrees filmed side-on
+    // but only about 82 filmed from the front (forearm toward the camera). The peak is set at 90 so a
+    // full curl registers from either view, at the cost of counting a curl that stops at forearm-level.
+    angleRange: [150, 90],
   },
   squat: {
     name: "squat",
