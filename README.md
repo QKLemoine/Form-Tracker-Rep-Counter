@@ -92,7 +92,17 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 
 `web/` is a browser version that runs on phones (iPhone Safari, Android Chrome) with no app install. Pose tracking runs entirely on the device via MediaPipe's web Pose Landmarker — video is never uploaded anywhere.
 
-**Status:** live tracking and rep counting work, with the same exercises and angle ranges as the Python app (`web/src/exercises.ts` mirrors `src/exercises.py` — change both together). Pick the exercise from the menu under the video; switching exercise resets the count. Golden-rep recording and form scoring are being ported next.
+**Status:** tracking, rep counting, golden-rep recording and form scoring all work, with the same exercises and angle ranges as the Python app (`web/src/exercises.ts` mirrors `src/exercises.py` — change both together). Pick the exercise from the menu under the video; switching exercise resets the counts.
+
+Unlike the desktop app, which measures the right side only, the web app tracks **both sides at once**:
+
+- Each side has its own rep count, progress bar and last-rep score, in the same colour as the limb highlighted on the video (left blue, right yellow).
+- A side only counts while the camera can see its joints. Filmed side-on, the far limb is dimmed and ignored.
+- **Recording a golden rep:** tap **Record golden rep**, use the 5-second countdown to get into position, then do one full rep starting from rest. The first complete rep from either side is saved automatically, in the browser's storage on that device, one per exercise.
+- **Scoring:** every later rep is compared with the golden rep and shown as a match percentage. There is one golden rep for both sides — the other side is compared against its mirror image, so a weaker side shows up as a lower score. Scoring uses that side's shoulder, hip and tracked joints, aligned with Dynamic Time Warping so rep speed doesn't matter.
+- Record the golden rep from the same camera position you train from: a rep filmed from the front can't be compared with one filmed from the side.
+
+The match percentage scale is a first guess: a replay of the same rep scores about 92–95%, but how low a genuinely bad rep scores has not been calibrated yet (`ZERO_MATCH_DISTANCE` in `web/src/formScoring.ts`).
 
 It's served from GitHub Pages at https://qklemoine.github.io/Form-Tracker-Rep-Counter/ (deployed by `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`).
 
