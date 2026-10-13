@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_EXERCISE, EXERCISES, SIDES, angleToPercent, jointAngle, type Point } from "./exercises";
+import {
+  CALIBRATION_MARGIN_DEGREES,
+  DEFAULT_EXERCISE,
+  EXERCISES,
+  SIDES,
+  angleToPercent,
+  calibratedRange,
+  furthestSustained,
+  jointAngle,
+  repProgress,
+  type Point,
+} from "./exercises";
 
 const pt = (x: number, y: number): Point => ({ x, y });
 
@@ -52,6 +63,48 @@ describe("angleToPercent", () => {
     // RepTracker compares against exactly 0 and 100.
     expect(angleToPercent(beyondStart, range)).toBe(0);
     expect(angleToPercent(beyondEnd, range)).toBe(100);
+  });
+});
+
+describe("calibration", () => {
+  const curl = [150, 90] as const;
+
+  it("repProgress is unclipped", () => {
+    expect(repProgress(150, curl)).toBeCloseTo(0);
+    expect(repProgress(90, curl)).toBe(1);
+    expect(repProgress(60, curl)).toBe(1.5);
+    expect(repProgress(170, curl)).toBeCloseTo(-1 / 3);
+  });
+
+  it("furthestSustained ignores a few outlier frames", () => {
+    const progress = [0, 0.5, 0.9, 0.9, 0.9, 0.9, 0.9, 3, 0.4];
+    expect(furthestSustained(progress)).toBe(0.9);
+    expect(furthestSustained([0.2, 0.7])).toBe(0.2);
+    expect(furthestSustained([])).toBe(-Infinity);
+  });
+
+  it("sets the peak just short of where the limb got to", () => {
+    // Reached 82 degrees (short of the default 90): the peak moves out to 90.
+    expect(calibratedRange(curl, repProgress(82, curl))).toEqual([150, 82 + CALIBRATION_MARGIN_DEGREES]);
+    // Reached 55 degrees: the peak tightens to 63, so a half curl no longer counts.
+    expect(calibratedRange(curl, repProgress(55, curl))).toEqual([150, 55 + CALIBRATION_MARGIN_DEGREES]);
+  });
+
+  it("works for a range that runs upward", () => {
+    expect(calibratedRange([30, 130], repProgress(120, [30, 130]))).toEqual([30, 120 - CALIBRATION_MARGIN_DEGREES]);
+  });
+
+  it("makes a rep that reaches the same position count as 100%", () => {
+    const range = calibratedRange(curl, repProgress(97, curl))!;
+    expect(angleToPercent(97, range)).toBe(100);
+    expect(angleToPercent(99, range)).toBe(100);
+    expect(angleToPercent(115, range)).toBeLessThan(100);
+  });
+
+  it("is null when the limb did not do the rep", () => {
+    expect(calibratedRange(curl, repProgress(140, curl))).toBeNull();
+    expect(calibratedRange(curl, -Infinity)).toBeNull();
+    expect(calibratedRange(curl, NaN)).toBeNull();
   });
 });
 

@@ -7,7 +7,18 @@ it("parses what it stores", () => {
   expect(parseGolden(JSON.stringify(golden))).toEqual(golden);
 });
 
+it("parses per-side calibrated ranges", () => {
+  const calibrated: GoldenRep = { ...golden, ranges: { left: [150, 78], right: [150, 96] } };
+  expect(parseGolden(JSON.stringify(calibrated))).toEqual(calibrated);
+  const oneSide: GoldenRep = { ...golden, ranges: { right: [150, 96] } };
+  expect(parseGolden(JSON.stringify(oneSide))).toEqual(oneSide);
+});
+
 it.each([
+  ["ranges not an object", JSON.stringify({ ...golden, ranges: 5 })],
+  ["a range with one number", JSON.stringify({ ...golden, ranges: { left: [150] } })],
+  ["a range with no span", JSON.stringify({ ...golden, ranges: { left: [150, 150] } })],
+  ["a non-numeric range", JSON.stringify({ ...golden, ranges: { right: [150, "90"] } })],
   ["nothing stored", null],
   ["not JSON", "{oops"],
   ["not an object", "42"],

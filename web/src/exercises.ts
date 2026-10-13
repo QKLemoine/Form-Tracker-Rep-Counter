@@ -22,7 +22,7 @@ export interface Exercise {
   /** Per side, the MediaPipe Pose landmark ids forming the tracked joint angle (the middle one is the vertex). */
   joints: Record<Side, readonly [number, number, number]>;
   /** Interior degrees (0-180), measured in 3D: [angle at rest = 0% of the rep, angle at the peak = 100%]. */
-  angleRange: readonly [number, number];
+  angleRange: AngleRange;
   /** True while the range is an uncalibrated placeholder. */
   experimental?: boolean;
 }
@@ -41,10 +41,39 @@ export function jointAngle(p1: Point, p2: Point, p3: Point): number {
   return (Math.acos(Math.min(1, Math.max(-1, cosine))) * 180) / Math.PI;
 }
 
+export type AngleRange = readonly [number, number];
+
+/** How far through the rep an angle is, as an unclipped fraction: 0 at rest, 1 at the peak, more beyond it. */
+export function repProgress(angle: number, [start, end]: AngleRange): number {
+  return (angle - start) / (end - start);
+}
+
 /** Map a joint angle onto 0-100% of the rep, clipped to exactly 0 and 100. The range may run in either direction. */
-export function angleToPercent(angle: number, [start, end]: readonly [number, number]): number {
-  const fraction = (angle - start) / (end - start);
-  return Math.min(1, Math.max(0, fraction)) * 100;
+export function angleToPercent(angle: number, range: AngleRange): number {
+  return Math.min(1, Math.max(0, repProgress(angle, range))) * 100;
+}
+
+/** The furthest progress that was held for at least `frames` frames, so one jittery frame can't set it. */
+export function furthestSustained(progress: number[], frames = 5): number {
+  if (progress.length === 0) return -Infinity;
+  const descending = [...progress].sort((a, b) => b - a);
+  return descending[Math.min(frames, descending.length) - 1];
+}
+
+/** How far short of a person's own furthest position still counts as the top of a rep. */
+export const CALIBRATION_MARGIN_DEGREES = 8;
+
+/**
+ * A range whose peak is where this person's limb actually got to, as the camera reads it, less a
+ * margin. The pose model's 3D estimate reads the two sides of the body up to about 10 degrees
+ * apart, so each side is calibrated separately. `furthest` is progress along `range` (see
+ * repProgress). Returns null if the limb did not get at least halfway, i.e. it did not do the rep.
+ */
+export function calibratedRange(range: AngleRange, furthest: number): [number, number] | null {
+  if (!(furthest >= 0.5) || !Number.isFinite(furthest)) return null;
+  const [start, end] = range;
+  const reached = start + (end - start) * furthest;
+  return [start, reached - Math.sign(end - start) * CALIBRATION_MARGIN_DEGREES];
 }
 
 export const EXERCISES: Record<string, Exercise> = {

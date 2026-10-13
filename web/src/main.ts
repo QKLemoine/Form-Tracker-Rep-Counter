@@ -1,5 +1,17 @@
 import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
-import { DEFAULT_EXERCISE, EXERCISES, SIDES, angleToPercent, jointAngle, type Point, type Side } from "./exercises";
+import {
+  DEFAULT_EXERCISE,
+  EXERCISES,
+  SIDES,
+  angleToPercent,
+  calibratedRange,
+  furthestSustained,
+  jointAngle,
+  repProgress,
+  type AngleRange,
+  type Point,
+  type Side,
+} from "./exercises";
 import { matchPercent, repDistance, sideFrame, type Frame } from "./formScoring";
 import { PoseDetector, type Pose } from "./pose";
 import { RepTracker } from "./repTracker";
@@ -46,8 +58,11 @@ const newSideState = (): SideState => ({ tracker: new RepTracker<Frame>(), perce
 let exercise = EXERCISES[DEFAULT_EXERCISE];
 let sides: Record<Side, SideState> = { left: newSideState(), right: newSideState() };
 let golden: GoldenRep | null = loadGolden(exercise.name);
-/** Set while recording a golden rep: counting down until `armAt`, then waiting for the first full rep. */
-let recording: { armAt: number; armed: boolean } | null = null;
+/**
+ * Set while recording a golden rep: counting down until `armAt`, then waiting for the first full rep.
+ * `progress` collects how far each side gets, measured against the exercise's default range.
+ */
+let recording: { armAt: number; armed: boolean; progress: Record<Side, number[]> } | null = null;
 let notice: { text: string; until: number } | null = null;
 
 // Back camera by default: a propped-up phone filming side-on is the main use case.
@@ -66,8 +81,13 @@ function setStatus(text: string, isError = false): void {
   statusEl.classList.toggle("error", isError);
 }
 
-function showNotice(text: string): void {
-  notice = { text, until: performance.now() + 4000 };
+function showNotice(text: string, ms = 4000): void {
+  notice = { text, until: performance.now() + ms };
+}
+
+/** Each side uses the range calibrated with the golden rep if it has one. Recording always uses the default. */
+function rangeFor(side: Side): AngleRange {
+  return (recording?.armed ? undefined : golden?.ranges?.[side]) ?? exercise.angleRange;
 }
 
 async function startCamera(): Promise<void> {
@@ -153,7 +173,9 @@ function updateSide(side: Side, pose: Pose | null, now: number): void {
 
   // Rep progress uses the 3D joint angle, so it reads the same from the front as from the side.
   const [a, b, c] = joints;
-  state.percent = angleToPercent(jointAngle(pose.world[a], pose.world[b], pose.world[c]), exercise.angleRange);
+  const angle = jointAngle(pose.world[a], pose.world[b], pose.world[c]);
+  if (recording?.armed) recording.progress[side].push(repProgress(angle, exercise.angleRange));
+  state.percent = angleToPercent(angle, rangeFor(side));
 
   // Form scoring compares the limb's path in the image. Image landmarks are normalized 0-1 per axis,
   // so convert to pixels or a non-square frame skews distances.
@@ -162,24 +184,32 @@ function updateSide(side: Side, pose: Pose | null, now: number): void {
   const rep = state.tracker.update(state.percent, sideFrame(toPixels, exercise, side));
   if (!rep) return;
   if (recording?.armed) {
-    finishRecording({ side, frames: rep });
+    finishRecording(side, rep, recording.progress);
   } else if (golden) {
     state.lastDistance = repDistance(golden.frames, rep);
   }
 }
 
 function startRecording(): void {
-  recording = { armAt: performance.now() + RECORD_COUNTDOWN_MS, armed: false };
+  recording = { armAt: performance.now() + RECORD_COUNTDOWN_MS, armed: false, progress: { left: [], right: [] } };
   renderHud();
 }
 
-function finishRecording(rep: GoldenRep): void {
-  golden = rep;
+function finishRecording(side: Side, frames: Frame[], progress: Record<Side, number[]>): void {
+  // The pose model reads the two sides a few degrees apart, so each side that did the rep gets its
+  // own top-of-rep angle from how far it actually got.
+  const ranges: GoldenRep["ranges"] = {};
+  for (const s of SIDES) {
+    const range = calibratedRange(exercise.angleRange, furthestSustained(progress[s]));
+    if (range) ranges[s] = range;
+  }
+  golden = { side, frames, ranges };
   recording = null;
   // Earlier scores were against the previous golden rep.
-  for (const side of SIDES) sides[side].lastDistance = null;
-  const stored = saveGolden(exercise.name, rep);
-  showNotice(`Golden rep saved from your ${rep.side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
+  for (const s of SIDES) sides[s].lastDistance = null;
+  const stored = saveGolden(exercise.name, golden);
+  const tops = SIDES.map((s) => `${s} ${ranges[s] ? `${Math.round(ranges[s][1])}°` : "not calibrated"}`).join(", ");
+  showNotice(`Golden rep saved from your ${side} side. Top of rep: ${tops}${stored ? "" : " (this visit only: the browser blocked storage)"}`, 8000);
 }
 
 function renderHud(): void {
@@ -199,7 +229,7 @@ function renderHud(): void {
 function statusText(tracking: boolean, now: number): string {
   if (recording) {
     return recording.armed
-      ? "Recording — do one full rep"
+      ? "Recording — do one full rep, both sides together"
       : `Get in position… ${Math.ceil((recording.armAt - now) / 1000)}`;
   }
   if (notice && now < notice.until) return notice.text;
