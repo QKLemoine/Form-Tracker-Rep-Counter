@@ -92,9 +92,9 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 
 `web/` is a browser version that runs on phones (iPhone Safari, Android Chrome) with no app install. Pose tracking runs entirely on the device via MediaPipe's web Pose Landmarker — video is never uploaded anywhere.
 
-**Status:** live camera and skeleton tracking work. Rep counting and golden-rep scoring are being ported from the Python app next.
+**Status:** live tracking and rep counting work, with the same exercises and angle ranges as the Python app (`web/src/exercises.ts` mirrors `src/exercises.py` — change both together). Pick the exercise from the menu under the video; switching exercise resets the count. Golden-rep recording and form scoring are being ported next.
 
-Once deployed, it's served from GitHub Pages at `https://qklemoine.github.io/Form-Tracker-Rep-Counter/` (deployed by `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`).
+It's served from GitHub Pages at https://qklemoine.github.io/Form-Tracker-Rep-Counter/ (deployed by `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`).
 
 To run it locally and open it on your phone:
 
@@ -116,3 +116,11 @@ pytest
 ```
 
 The pose-estimation smoke test loads the real model, so the first test run also needs internet to download it (see [How to Run](#how-to-run)).
+
+The web app has its own unit tests for the ported logic:
+
+```bash
+cd web
+npm install
+npm test
+```
