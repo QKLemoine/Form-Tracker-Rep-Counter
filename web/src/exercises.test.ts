@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_EXERCISE, EXERCISES, angleToPercent, jointAngle, type Point } from "./exercises";
+import { DEFAULT_EXERCISE, EXERCISES, SIDES, angleToPercent, jointAngle, type Point } from "./exercises";
 
 const pt = (x: number, y: number): Point => ({ x, y });
 
@@ -48,9 +48,14 @@ describe("EXERCISES", () => {
   it.each(Object.entries(EXERCISES))("%s is well formed", (key, exercise) => {
     expect(exercise.name).toBe(key);
     expect(exercise.label).not.toBe("");
-    for (const joint of exercise.joints) {
-      expect(Number.isInteger(joint) && joint >= 0 && joint <= 32).toBe(true);
+    for (const side of SIDES) {
+      expect(exercise.joints[side]).toHaveLength(3);
+      for (const joint of exercise.joints[side]) {
+        expect(Number.isInteger(joint) && joint >= 0 && joint <= 32).toBe(true);
+      }
     }
+    // MediaPipe numbers left landmarks odd and the matching right landmark one higher.
+    expect(exercise.joints.right).toEqual(exercise.joints.left.map((joint) => joint + 1));
     const [start, end] = exercise.angleRange;
     expect(start).not.toBe(end);
     for (const angle of [start, end]) {
@@ -58,9 +63,9 @@ describe("EXERCISES", () => {
     }
   });
 
-  it("matches the Python registry", () => {
-    // Mirrors src/exercises.py; update both together.
-    expect(EXERCISES.bicep_curl).toMatchObject({ joints: [12, 14, 16], angleRange: [150, 50] });
-    expect(EXERCISES.squat).toMatchObject({ joints: [24, 26, 28], angleRange: [170, 90] });
+  it("matches the Python registry on the right side", () => {
+    // Mirrors src/exercises.py (which tracks the right side only); update both together.
+    expect(EXERCISES.bicep_curl).toMatchObject({ joints: { right: [12, 14, 16] }, angleRange: [150, 50] });
+    expect(EXERCISES.squat).toMatchObject({ joints: { right: [24, 26, 28] }, angleRange: [170, 90] });
   });
 });

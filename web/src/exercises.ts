@@ -1,16 +1,23 @@
 // Port of src/exercises.py and joint_angle() from src/core/PoseEstimationModule.py.
-// Keep the two in step: same joints, same ranges, same math.
+// The right-side joints, ranges and math match Python; the left side is web-only for now.
 
 export interface Point {
   x: number;
   y: number;
 }
 
+export type Side = "left" | "right";
+export const SIDES: readonly Side[] = ["left", "right"];
+
+/** MediaPipe Pose landmark ids of each side's shoulder and hip. */
+export const SHOULDER: Record<Side, number> = { left: 11, right: 12 };
+export const HIP: Record<Side, number> = { left: 23, right: 24 };
+
 export interface Exercise {
   name: string;
   label: string;
-  /** MediaPipe Pose landmark ids forming the tracked joint angle (the middle one is the vertex). */
-  joints: readonly [number, number, number];
+  /** Per side, the MediaPipe Pose landmark ids forming the tracked joint angle (the middle one is the vertex). */
+  joints: Record<Side, readonly [number, number, number]>;
   /** Interior degrees (0-180): [angle at rest = 0% of the rep, angle at the peak = 100%]. */
   angleRange: readonly [number, number];
   /** True while the range is an uncalibrated placeholder. */
@@ -34,13 +41,13 @@ export const EXERCISES: Record<string, Exercise> = {
   bicep_curl: {
     name: "bicep_curl",
     label: "Bicep Curl",
-    joints: [12, 14, 16], // right shoulder, elbow, wrist
+    joints: { left: [11, 13, 15], right: [12, 14, 16] }, // shoulder, elbow, wrist
     angleRange: [150, 50],
   },
   squat: {
     name: "squat",
     label: "Squat",
-    joints: [24, 26, 28], // right hip, knee, ankle
+    joints: { left: [23, 25, 27], right: [24, 26, 28] }, // hip, knee, ankle
     angleRange: [170, 90],
     experimental: true,
   },

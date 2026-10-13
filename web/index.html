@@ -15,14 +15,29 @@
         <video id="video" playsinline muted></video>
         <canvas id="overlay"></canvas>
         <div class="hud">
-          <div class="reps"><span id="reps">0</span> <span class="reps-unit">reps</span></div>
-          <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+          <div class="panels">
+            <div class="panel" data-side="left">
+              <div class="panel-name">Left</div>
+              <div class="reps"><span id="reps-left">0</span> <span class="unit">reps</span></div>
+              <div class="match">last rep <span id="match-left">–</span></div>
+            </div>
+            <div class="panel" data-side="right">
+              <div class="panel-name">Right</div>
+              <div class="reps"><span id="reps-right">0</span> <span class="unit">reps</span></div>
+              <div class="match">last rep <span id="match-right">–</span></div>
+            </div>
+          </div>
+          <div class="bars">
+            <div class="bar" data-side="left"><span class="bar-name">L</span><div class="bar-track"><div id="bar-left" class="bar-fill"></div></div></div>
+            <div class="bar" data-side="right"><span class="bar-name">R</span><div class="bar-track"><div id="bar-right" class="bar-fill"></div></div></div>
+          </div>
         </div>
       </div>
       <p id="status" class="status" role="status">Tap Start to turn on the camera. Video stays on this device.</p>
       <div class="controls">
         <button id="start" type="button">Start camera</button>
         <select id="exercise" aria-label="Exercise"></select>
+        <button id="record" type="button" disabled>Record golden rep</button>
         <button id="flip" type="button" disabled>Flip camera</button>
       </div>
     </main>

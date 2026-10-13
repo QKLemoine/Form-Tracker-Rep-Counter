@@ -1,39 +1,73 @@
 import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
-import { DEFAULT_EXERCISE, EXERCISES, angleToPercent, jointAngle, type Point } from "./exercises";
+import { DEFAULT_EXERCISE, EXERCISES, SIDES, angleToPercent, jointAngle, type Point, type Side } from "./exercises";
+import { matchPercent, repDistance, sideFrame, type Frame } from "./formScoring";
 import { PoseDetector } from "./pose";
 import { RepTracker } from "./repTracker";
+import { loadGolden, saveGolden, type GoldenRep } from "./storage";
 
-const stage = document.querySelector<HTMLDivElement>("#stage")!;
-const video = document.querySelector<HTMLVideoElement>("#video")!;
-const canvas = document.querySelector<HTMLCanvasElement>("#overlay")!;
-const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
-const startButton = document.querySelector<HTMLButtonElement>("#start")!;
-const flipButton = document.querySelector<HTMLButtonElement>("#flip")!;
-const exerciseSelect = document.querySelector<HTMLSelectElement>("#exercise")!;
-const repsEl = document.querySelector<HTMLSpanElement>("#reps")!;
-const progressFill = document.querySelector<HTMLDivElement>("#progress-fill")!;
+/** A side only counts while the camera can actually see its joints; hidden limbs are guessed and jitter. */
+const MIN_VISIBILITY = 0.5;
+/** A rep in progress is dropped once its limb has been out of view this long, so it can't finish on stale data. */
+const HIDDEN_GRACE_MS = 1000;
+/** Time to step back from the phone before a golden rep starts recording. */
+const RECORD_COUNTDOWN_MS = 5000;
+const SIDE_COLOR: Record<Side, string> = { left: "#6cb6ff", right: "#ffd166" };
+
+const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
+const stage = $<HTMLDivElement>("#stage");
+const video = $<HTMLVideoElement>("#video");
+const canvas = $<HTMLCanvasElement>("#overlay");
+const statusEl = $<HTMLParagraphElement>("#status");
+const startButton = $<HTMLButtonElement>("#start");
+const flipButton = $<HTMLButtonElement>("#flip");
+const recordButton = $<HTMLButtonElement>("#record");
+const exerciseSelect = $<HTMLSelectElement>("#exercise");
+const sideEls = (side: Side) => ({
+  reps: $<HTMLSpanElement>(`#reps-${side}`),
+  match: $<HTMLSpanElement>(`#match-${side}`),
+  bar: $<HTMLDivElement>(`#bar-${side}`),
+  all: document.querySelectorAll<HTMLElement>(`[data-side="${side}"]`),
+});
+const hud: Record<Side, ReturnType<typeof sideEls>> = { left: sideEls("left"), right: sideEls("right") };
 
 const ctx = canvas.getContext("2d")!;
 const drawing = new DrawingUtils(ctx);
 
-let exercise = EXERCISES[DEFAULT_EXERCISE];
-let tracker = new RepTracker();
-
-for (const { name, label, experimental } of Object.values(EXERCISES)) {
-  exerciseSelect.add(new Option(experimental ? `${label} (experimental)` : label, name, false, name === DEFAULT_EXERCISE));
+interface SideState {
+  tracker: RepTracker<Frame>;
+  percent: number;
+  visible: boolean;
+  lastSeen: number;
+  /** Distance of the last completed rep from the golden rep, once there is one. */
+  lastDistance: number | null;
 }
+const newSideState = (): SideState => ({ tracker: new RepTracker<Frame>(), percent: 0, visible: false, lastSeen: 0, lastDistance: null });
+
+let exercise = EXERCISES[DEFAULT_EXERCISE];
+let sides: Record<Side, SideState> = { left: newSideState(), right: newSideState() };
+let golden: GoldenRep | null = loadGolden(exercise.name);
+/** Set while recording a golden rep: counting down until `armAt`, then waiting for the first full rep. */
+let recording: { armAt: number; armed: boolean } | null = null;
+let notice: { text: string; until: number } | null = null;
 
 // Back camera by default: a propped-up phone filming side-on is the main use case.
 let facingMode: "environment" | "user" = "environment";
 let stream: MediaStream | null = null;
 let detectorPromise: Promise<PoseDetector> | null = null;
 let detector: PoseDetector | null = null;
-let lastVideoTime = -1;
 let loopRunning = false;
+
+for (const { name, label, experimental } of Object.values(EXERCISES)) {
+  exerciseSelect.add(new Option(experimental ? `${label} (experimental)` : label, name, false, name === DEFAULT_EXERCISE));
+}
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
   statusEl.classList.toggle("error", isError);
+}
+
+function showNotice(text: string): void {
+  notice = { text, until: performance.now() + 4000 };
 }
 
 async function startCamera(): Promise<void> {
@@ -71,10 +105,12 @@ async function startCamera(): Promise<void> {
     setStatus(`Could not load the pose model: ${err}`, true);
     return;
   }
+  recordButton.disabled = false;
+  renderHud();
 
   if (!loopRunning) {
     loopRunning = true;
-    requestAnimationFrame(loop);
+    video.requestVideoFrameCallback(onFrame);
   }
 }
 
@@ -96,35 +132,96 @@ function draw(landmarks: NormalizedLandmark[] | null): void {
   if (!landmarks) return;
   const lineWidth = Math.max(2, canvas.width / 320);
   drawing.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, { color: "#4cc38a", lineWidth });
-  // Highlight the limb the selected exercise is measuring.
-  const [a, b, c] = exercise.joints;
-  drawing.drawConnectors(landmarks, [{ start: a, end: b }, { start: b, end: c }], { color: "#ffd166", lineWidth: lineWidth * 2 });
+  // Highlight each limb being measured in its side's colour.
+  for (const side of SIDES) {
+    if (!sides[side].visible) continue;
+    const [a, b, c] = exercise.joints[side];
+    drawing.drawConnectors(landmarks, [{ start: a, end: b }, { start: b, end: c }], { color: SIDE_COLOR[side], lineWidth: lineWidth * 2 });
+  }
   drawing.drawLandmarks(landmarks, { color: "#e8eaed", radius: lineWidth, lineWidth: 1 });
 }
 
-function updateReps(landmarks: NormalizedLandmark[]): void {
-  // Landmarks are normalized 0-1 per axis; angles must be measured in pixels or a non-square frame skews them.
-  const toPixels = (i: number): Point => ({ x: landmarks[i].x * canvas.width, y: landmarks[i].y * canvas.height });
-  const [a, b, c] = exercise.joints;
-  const percent = angleToPercent(jointAngle(toPixels(a), toPixels(b), toPixels(c)), exercise.angleRange);
-  tracker.update(percent);
-  renderHud(percent);
-}
-
-function renderHud(percent: number): void {
-  repsEl.textContent = String(Math.floor(tracker.count));
-  progressFill.style.width = `${percent}%`;
-}
-
-function loop(): void {
-  if (detector && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime !== lastVideoTime) {
-    lastVideoTime = video.currentTime;
-    const landmarks = detector.detect(video, performance.now());
-    draw(landmarks);
-    if (landmarks) updateReps(landmarks);
-    setStatus(landmarks ? `Tracking (${detector.delegate})` : "No one in view — step into the frame");
+function updateSide(side: Side, landmarks: NormalizedLandmark[] | null, now: number): void {
+  const state = sides[side];
+  const joints = exercise.joints[side];
+  state.visible = landmarks !== null && joints.every((id) => landmarks[id].visibility >= MIN_VISIBILITY);
+  if (!landmarks || !state.visible) {
+    if (now - state.lastSeen > HIDDEN_GRACE_MS) state.tracker.abandonRep();
+    return;
   }
-  requestAnimationFrame(loop);
+  state.lastSeen = now;
+
+  // Landmarks are normalized 0-1 per axis; measure in pixels or a non-square frame skews angles and distances.
+  const toPixels = (id: number): Point => ({ x: landmarks[id].x * canvas.width, y: landmarks[id].y * canvas.height });
+  const [a, b, c] = joints;
+  state.percent = angleToPercent(jointAngle(toPixels(a), toPixels(b), toPixels(c)), exercise.angleRange);
+
+  const rep = state.tracker.update(state.percent, sideFrame(toPixels, exercise, side));
+  if (!rep) return;
+  if (recording?.armed) {
+    finishRecording({ side, frames: rep });
+  } else if (golden) {
+    state.lastDistance = repDistance(golden.frames, rep);
+  }
+}
+
+function startRecording(): void {
+  recording = { armAt: performance.now() + RECORD_COUNTDOWN_MS, armed: false };
+  renderHud();
+}
+
+function finishRecording(rep: GoldenRep): void {
+  golden = rep;
+  recording = null;
+  // Earlier scores were against the previous golden rep.
+  for (const side of SIDES) sides[side].lastDistance = null;
+  const stored = saveGolden(exercise.name, rep);
+  showNotice(`Golden rep saved from your ${rep.side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
+}
+
+function renderHud(): void {
+  for (const side of SIDES) {
+    const state = sides[side];
+    const els = hud[side];
+    els.reps.textContent = String(Math.floor(state.tracker.count));
+    els.bar.style.width = `${state.visible ? state.percent : 0}%`;
+    els.match.textContent = state.lastDistance === null ? "–" : `${matchPercent(state.lastDistance)}%`;
+    els.match.dataset.distance = state.lastDistance === null ? "" : state.lastDistance.toFixed(3);
+    els.all.forEach((el) => el.classList.toggle("hidden-side", !state.visible));
+  }
+  recordButton.textContent = recording ? "Cancel" : golden ? "Re-record golden rep" : "Record golden rep";
+  recordButton.classList.toggle("active", recording !== null);
+}
+
+function statusText(tracking: boolean, now: number): string {
+  if (recording) {
+    return recording.armed
+      ? "Recording — do one full rep"
+      : `Get in position… ${Math.ceil((recording.armAt - now) / 1000)}`;
+  }
+  if (notice && now < notice.until) return notice.text;
+  if (!tracking) return "No one in view — step into the frame";
+  const base = `Tracking (${detector!.delegate})`;
+  return golden ? base : `${base} — record a golden rep to score your form`;
+}
+
+/** Runs once per new camera frame. */
+function onFrame(): void {
+  if (detector && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    const now = performance.now();
+    if (recording && !recording.armed && now >= recording.armAt) {
+      recording.armed = true;
+      // Whatever the limbs did while walking into position is not part of the golden rep.
+      for (const side of SIDES) sides[side].tracker.abandonRep();
+    }
+
+    const landmarks = detector.detect(video, now);
+    for (const side of SIDES) updateSide(side, landmarks, now);
+    draw(landmarks);
+    renderHud();
+    setStatus(statusText(landmarks !== null, now));
+  }
+  video.requestVideoFrameCallback(onFrame);
 }
 
 startButton.addEventListener("click", () => void startCamera());
@@ -132,10 +229,20 @@ flipButton.addEventListener("click", () => {
   facingMode = facingMode === "environment" ? "user" : "environment";
   void startCamera();
 });
+recordButton.addEventListener("click", () => {
+  if (recording) {
+    recording = null;
+    renderHud();
+  } else {
+    startRecording();
+  }
+});
 exerciseSelect.addEventListener("change", () => {
   exercise = EXERCISES[exerciseSelect.value];
-  tracker = new RepTracker();
-  renderHud(0);
+  sides = { left: newSideState(), right: newSideState() };
+  golden = loadGolden(exercise.name);
+  recording = null;
+  renderHud();
 });
 video.addEventListener("loadedmetadata", fitStage);
 window.addEventListener("resize", fitStage);

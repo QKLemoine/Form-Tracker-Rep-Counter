@@ -67,29 +67,85 @@ h1 {
   pointer-events: none;
 }
 
-.reps {
-  padding: 8px 14px;
-  font-size: 3rem;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 1px 6px rgb(0 0 0 / 0.8);
+/* Each body side has its own colour, shared by its panel, its bar and the limb drawn on the video. */
+[data-side="left"] {
+  --side: #6cb6ff;
 }
 
-.reps-unit {
-  font-size: 1rem;
+[data-side="right"] {
+  --side: #ffd166;
+}
+
+/* A side whose joints the camera can't see. */
+[data-side].hidden-side {
+  opacity: 0.35;
+}
+
+.panels {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 0.9);
+}
+
+.panel[data-side="right"] {
+  text-align: right;
+}
+
+.panel-name {
+  color: var(--side);
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.reps {
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+
+.unit,
+.match {
+  font-size: 0.85rem;
   font-weight: 600;
 }
 
-.progress {
-  height: 10px;
-  background: rgb(0 0 0 / 0.5);
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px 10px;
+  background: linear-gradient(transparent, rgb(0 0 0 / 0.6));
 }
 
-.progress-fill {
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bar-name {
+  width: 1em;
+  color: var(--side);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 0.2);
+}
+
+.bar-fill {
   height: 100%;
   width: 0;
-  background: var(--accent);
+  background: var(--side);
 }
 
 .status {
@@ -125,6 +181,11 @@ select {
 button#start {
   background: var(--accent);
   color: #0b1a12;
+}
+
+button#record.active {
+  background: #f28b82;
+  color: #2a0d0a;
 }
 
 button:disabled {
