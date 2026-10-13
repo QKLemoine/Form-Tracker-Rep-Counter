@@ -12,6 +12,21 @@ describe("jointAngle", () => {
     expect(jointAngle(p1, p2, p3)).toBeCloseTo(expected);
   });
 
+  it("ignores foreshortening when given depth", () => {
+    // An upper arm hanging down and a forearm pointing straight at the camera: a true right angle.
+    // Its 2D image is degenerate (the wrist sits on the elbow); a forearm tilted slightly up reads as fully closed.
+    const shoulder = { x: 0, y: -1, z: 0 };
+    const elbow = { x: 0, y: 0, z: 0 };
+    expect(jointAngle(shoulder, elbow, { x: 0, y: 0, z: -1 })).toBeCloseTo(90);
+    const tilted = { x: 0, y: -0.1, z: -1 };
+    expect(jointAngle(shoulder, elbow, tilted)).toBeCloseTo(84.3, 1);
+    expect(jointAngle(pt(0, -1), pt(0, 0), pt(tilted.x, tilted.y))).toBeCloseTo(0);
+  });
+
+  it("treats a zero-length segment as straight instead of NaN", () => {
+    expect(jointAngle(pt(0, 0), pt(0, 0), pt(1, 0))).toBe(180);
+  });
+
   it("is the same for a mirrored view", () => {
     const [shoulder, elbow, wrist] = [pt(0, -10), pt(0, 0), pt(7, 5)];
     const mirror = (p: Point) => pt(-p.x, p.y);
@@ -63,9 +78,9 @@ describe("EXERCISES", () => {
     }
   });
 
-  it("matches the Python registry on the right side", () => {
-    // Mirrors src/exercises.py (which tracks the right side only); update both together.
-    expect(EXERCISES.bicep_curl).toMatchObject({ joints: { right: [12, 14, 16] }, angleRange: [150, 50] });
-    expect(EXERCISES.squat).toMatchObject({ joints: { right: [24, 26, 28] }, angleRange: [170, 90] });
+  it("uses the same right-side joints as the Python registry", () => {
+    // src/exercises.py tracks the right side only. Angle ranges are not compared: Python's are for 2D angles.
+    expect(EXERCISES.bicep_curl.joints.right).toEqual([12, 14, 16]);
+    expect(EXERCISES.squat.joints.right).toEqual([24, 26, 28]);
   });
 });

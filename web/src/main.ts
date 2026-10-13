@@ -1,7 +1,7 @@
 import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { DEFAULT_EXERCISE, EXERCISES, SIDES, angleToPercent, jointAngle, type Point, type Side } from "./exercises";
 import { matchPercent, repDistance, sideFrame, type Frame } from "./formScoring";
-import { PoseDetector } from "./pose";
+import { PoseDetector, type Pose } from "./pose";
 import { RepTracker } from "./repTracker";
 import { loadGolden, saveGolden, type GoldenRep } from "./storage";
 
@@ -141,20 +141,23 @@ function draw(landmarks: NormalizedLandmark[] | null): void {
   drawing.drawLandmarks(landmarks, { color: "#e8eaed", radius: lineWidth, lineWidth: 1 });
 }
 
-function updateSide(side: Side, landmarks: NormalizedLandmark[] | null, now: number): void {
+function updateSide(side: Side, pose: Pose | null, now: number): void {
   const state = sides[side];
   const joints = exercise.joints[side];
-  state.visible = landmarks !== null && joints.every((id) => landmarks[id].visibility >= MIN_VISIBILITY);
-  if (!landmarks || !state.visible) {
+  state.visible = pose !== null && joints.every((id) => pose.image[id].visibility >= MIN_VISIBILITY);
+  if (!pose || !state.visible) {
     if (now - state.lastSeen > HIDDEN_GRACE_MS) state.tracker.abandonRep();
     return;
   }
   state.lastSeen = now;
 
-  // Landmarks are normalized 0-1 per axis; measure in pixels or a non-square frame skews angles and distances.
-  const toPixels = (id: number): Point => ({ x: landmarks[id].x * canvas.width, y: landmarks[id].y * canvas.height });
+  // Rep progress uses the 3D joint angle, so it reads the same from the front as from the side.
   const [a, b, c] = joints;
-  state.percent = angleToPercent(jointAngle(toPixels(a), toPixels(b), toPixels(c)), exercise.angleRange);
+  state.percent = angleToPercent(jointAngle(pose.world[a], pose.world[b], pose.world[c]), exercise.angleRange);
+
+  // Form scoring compares the limb's path in the image. Image landmarks are normalized 0-1 per axis,
+  // so convert to pixels or a non-square frame skews distances.
+  const toPixels = (id: number): Point => ({ x: pose.image[id].x * canvas.width, y: pose.image[id].y * canvas.height });
 
   const rep = state.tracker.update(state.percent, sideFrame(toPixels, exercise, side));
   if (!rep) return;
@@ -215,11 +218,11 @@ function onFrame(): void {
       for (const side of SIDES) sides[side].tracker.abandonRep();
     }
 
-    const landmarks = detector.detect(video, now);
-    for (const side of SIDES) updateSide(side, landmarks, now);
-    draw(landmarks);
+    const pose = detector.detect(video, now);
+    for (const side of SIDES) updateSide(side, pose, now);
+    draw(pose?.image ?? null);
     renderHud();
-    setStatus(statusText(landmarks !== null, now));
+    setStatus(statusText(pose !== null, now));
   }
   video.requestVideoFrameCallback(onFrame);
 }
