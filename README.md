@@ -92,9 +92,11 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 
 `web/` is a browser version that runs on phones (iPhone Safari, Android Chrome) with no app install. Pose tracking runs entirely on the device via MediaPipe's web Pose Landmarker — video is never uploaded anywhere.
 
-**Status:** tracking, rep counting, golden-rep recording and form scoring all work, with the same exercises and angle ranges as the Python app (`web/src/exercises.ts` mirrors `src/exercises.py` — change both together). Pick the exercise from the menu under the video; switching exercise resets the counts.
+**Status:** tracking, rep counting, golden-rep recording and form scoring all work, with the same exercises as the Python app (`web/src/exercises.ts` is the web counterpart of `src/exercises.py`). Pick the exercise from the menu under the video; switching exercise resets the counts.
 
-Unlike the desktop app, which measures the right side only, the web app tracks **both sides at once**:
+**Rep progress is measured in 3D.** The desktop app measures the joint angle in the flat image, which closes too early when a limb swings toward the camera (a curl filmed from the front). The web app uses the angle between MediaPipe's estimated 3D joint positions instead, so it reads the same from the front as from the side. That estimate is good to roughly ±10°, so the web angle ranges carry extra margin and differ from the desktop ones: bicep curl is `150 70` here against `150 50` on desktop.
+
+Unlike the desktop app, which measures the right side only, the web app also tracks **both sides at once**:
 
 - Each side has its own rep count, progress bar and last-rep score, in the same colour as the limb highlighted on the video (left blue, right yellow).
 - A side only counts while the camera can see its joints. Filmed side-on, the far limb is dimmed and ignored.
