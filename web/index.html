@@ -14,10 +14,15 @@
       <div id="stage" class="stage" hidden>
         <video id="video" playsinline muted></video>
         <canvas id="overlay"></canvas>
+        <div class="hud">
+          <div class="reps"><span id="reps">0</span> <span class="reps-unit">reps</span></div>
+          <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+        </div>
       </div>
       <p id="status" class="status" role="status">Tap Start to turn on the camera. Video stays on this device.</p>
       <div class="controls">
         <button id="start" type="button">Start camera</button>
+        <select id="exercise" aria-label="Exercise"></select>
         <button id="flip" type="button" disabled>Flip camera</button>
       </div>
     </main>

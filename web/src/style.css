@@ -44,17 +44,52 @@ h1 {
   display: none;
 }
 
-/* The front camera is shown mirrored, like a selfie view. */
-.stage.mirrored {
-  transform: scaleX(-1);
-}
-
 .stage video,
 .stage canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+/* The front camera is shown mirrored, like a selfie view. Only the picture flips, not the HUD text. */
+.stage.mirrored video,
+.stage.mirrored canvas {
+  transform: scaleX(-1);
+}
+
+.hud {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.reps {
+  padding: 8px 14px;
+  font-size: 3rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 0.8);
+}
+
+.reps-unit {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.progress {
+  height: 10px;
+  background: rgb(0 0 0 / 0.5);
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
 }
 
 .status {
@@ -70,10 +105,13 @@ h1 {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 12px;
 }
 
-button {
+button,
+select {
   font: inherit;
   font-weight: 600;
   color: var(--fg);
