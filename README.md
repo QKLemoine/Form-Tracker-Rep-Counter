@@ -92,22 +92,31 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 
 `web/` is a browser version that runs on phones (iPhone Safari, Android Chrome) with no app install. Pose tracking runs entirely on the device via MediaPipe's web Pose Landmarker — video is never uploaded anywhere.
 
-**Status:** tracking, rep counting, golden-rep recording and form scoring all work, with the same exercises as the Python app (`web/src/exercises.ts` is the web counterpart of `src/exercises.py`). Pick the exercise from the menu under the video; switching exercise resets the counts.
+**Status:** tracking, rep counting, calibration, golden-rep recording and form scoring all work, with the same exercises as the Python app. Its rep logic has moved ahead of the desktop app's and no longer matches it. Pick the exercise from the menu under the video; switching exercise resets the counts.
 
-**Rep progress is measured in 3D.** The desktop app measures the joint angle in the flat image, which closes too early when a limb swings toward the camera (a curl filmed from the front). The web app uses the angle between MediaPipe's estimated 3D joint positions instead, so it reads the same from the front as from the side. That estimate is imperfect, especially for depth: a full curl reads about 50–60° at the top filmed side-on but only about 82° filmed from the front. So the web angle ranges carry extra margin and differ from the desktop ones: bicep curl is `150 90` here against `150 50` on desktop, which means a curl that stops with the forearm level still counts as a full rep.
+**Both sides are tracked at once**, each with its own rep count, progress bar and last-rep score, in the colour of the limb highlighted on the video (left blue, right yellow). The desktop app measures the right side only.
 
-Unlike the desktop app, which measures the right side only, the web app also tracks **both sides at once**:
+How a rep is measured:
 
-- Each side has its own rep count, progress bar and last-rep score, in the same colour as the limb highlighted on the video (left blue, right yellow).
-- A side only counts while the camera can see its joints. Filmed side-on, the far limb is dimmed and ignored.
-- **Recording a golden rep:** tap **Record golden rep**, use the 5-second countdown to get into position, then do one full rep starting from rest, with both sides together. The first complete rep from either side is saved automatically, in the browser's storage on that device, one per exercise.
-- **Recording also calibrates each side.** The pose model's 3D estimate reads the two sides of the body up to about 10° apart for the same position, so no single threshold fits both. While recording, the app notes how far each side actually gets and sets that side's "top of the rep" 8° short of it (shown in the status line, e.g. `left 71°, right 57°`). A side that didn't move during the recording keeps the exercise's default range. Because each side is measured against its own best, a difference in range of motion between sides won't show in the progress bars — it shows in the form score instead.
+- **3D angle.** Rep progress uses the angle between MediaPipe's estimated 3D joint positions. The desktop app measures the angle in the flat image, which closes too early when a limb swings toward the camera (a curl filmed from the front).
+- **Per-side calibration.** The 3D estimate is imperfect: for the same position it reads the two sides of the body about 10° apart, and it reads differently from different camera positions. Tap **Calibrate**, use the 5-second countdown to get into position, then do slow full reps for 10 seconds. Each side that completes a full rep gets its own rest and top angles; a side that doesn't keeps the default range (`150°→90°` for a curl). Calibration lasts until you reload the page, flip the camera or switch exercise, so redo it when you move the phone. Because each side is measured against its own range, a difference in range of motion between sides shows in the form score, not the bars.
+- **Counting.** A rep counts when the bar goes above 85% and comes back below 25%, each for two frames in a row, taking at least 0.4 seconds, and starting from rest. The bar turns white once the top has registered. It does not need to hit exactly 100% and 0%.
+- **Hidden limbs.** A side only counts while the camera can see its joints (visibility above 0.6 to start, below 0.4 to stop, three frames each way). The pose model still guesses where a hidden limb is, and that guess moves like a real rep, so a hidden side is frozen, marked "not visible" and never counted. Filmed side-on, this makes it a one-arm session automatically. A rep in progress is dropped if its limb stays hidden for more than a second.
+
+Golden reps and scoring:
+
+- **Recording a golden rep:** tap **Record golden rep**, use the countdown to get into position, then do one full rep starting from rest. The first complete rep from either side is saved automatically, in the browser's storage on that device, one per exercise.
 - **Scoring:** every later rep is compared with the golden rep and shown as a match percentage. There is one golden rep for both sides — the other side is compared against its mirror image, so a weaker side shows up as a lower score. Scoring uses that side's shoulder, hip and tracked joints, aligned with Dynamic Time Warping so rep speed doesn't matter.
 - Record the golden rep from the same camera position you train from: a rep filmed from the front can't be compared with one filmed from the side.
+- The match percentage scale is a first guess: a replay of the same rep scores about 92–96%, but how low a genuinely bad rep scores has not been calibrated yet (`ZERO_MATCH_DISTANCE` in `web/src/formScoring.ts`).
 
-The match percentage scale is a first guess: a replay of the same rep scores about 92–95%, but how low a genuinely bad rep scores has not been calibrated yet (`ZERO_MATCH_DISTANCE` in `web/src/formScoring.ts`).
+**Debug panel.** Tap **Debug** under the controls to see, per side: each joint's visibility, the raw and smoothed 3D angle, the 2D angle for comparison, the active range, the bar value and the rep state, plus the frame rate. **Record landmarks** saves up to a minute of joint coordinates (never video) to a JSON file on the device. Those files replay through the tracker as test fixtures, which is how to turn a tracking problem seen on a phone into a test.
 
-It's served from GitHub Pages at https://qklemoine.github.io/Form-Tracker-Rep-Counter/ (deployed by `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`).
+Code layout: `web/src/tracking.ts` is the whole pipeline as a class with no camera or page dependencies (landmarks and a timestamp in, each side's state out); `main.ts` is only camera, drawing and controls. `scripts/extract_landmarks.py` writes the same fixture format from a video file:
+
+```bash
+python -m scripts.extract_landmarks videos/clip.mov web/src/fixtures/clip.json
+```
 
 To run it locally and open it on your phone:
 
@@ -130,7 +139,7 @@ pytest
 
 The pose-estimation smoke test loads the real model, so the first test run also needs internet to download it (see [How to Run](#how-to-run)).
 
-The web app has its own unit tests for the ported logic:
+The web app has its own unit tests, including replays of real landmark recordings in `web/src/fixtures/`:
 
 ```bash
 cd web
