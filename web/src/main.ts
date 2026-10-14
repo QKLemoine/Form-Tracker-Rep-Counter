@@ -1,28 +1,19 @@
-import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
-import {
-  DEFAULT_EXERCISE,
-  EXERCISES,
-  SIDES,
-  angleToPercent,
-  calibratedRange,
-  furthestSustained,
-  jointAngle,
-  repProgress,
-  type AngleRange,
-  type Point,
-  type Side,
-} from "./exercises";
-import { matchPercent, repDistance, sideFrame, type Frame } from "./formScoring";
-import { PoseDetector, type Pose } from "./pose";
-import { RepTracker } from "./repTracker";
-import { loadGolden, saveGolden, type GoldenRep } from "./storage";
+// The page: camera, drawing and controls. All tracking decisions live in tracking.ts.
 
-/** A side only counts while the camera can actually see its joints; hidden limbs are guessed and jitter. */
-const MIN_VISIBILITY = 0.5;
-/** A rep in progress is dropped once its limb has been out of view this long, so it can't finish on stale data. */
-const HIDDEN_GRACE_MS = 1000;
-/** Time to step back from the phone before a golden rep starts recording. */
-const RECORD_COUNTDOWN_MS = 5000;
+import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { DEFAULT_EXERCISE, EXERCISES, SIDES, calibrateRange, type AngleRange, type Side } from "./exercises";
+import { matchPercent, repDistance, type Frame } from "./formScoring";
+import { PoseDetector, type Pose } from "./pose";
+import { RECORDED_LANDMARKS, recordFrame, type LandmarkRecording, type RecordedFrame } from "./recording";
+import { loadGolden, saveGolden, type GoldenRep } from "./storage";
+import { MotionTracker, type SideSnapshot } from "./tracking";
+
+/** Time to step back from the phone before recording or calibrating starts. */
+const COUNTDOWN_MS = 5000;
+/** How long calibration watches the reps. */
+const CALIBRATION_MS = 10000;
+/** Landmark recordings stop by themselves after this long. */
+const MAX_LANDMARK_RECORDING_MS = 60000;
 const SIDE_COLOR: Record<Side, string> = { left: "#6cb6ff", right: "#ffd166" };
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -32,11 +23,18 @@ const canvas = $<HTMLCanvasElement>("#overlay");
 const statusEl = $<HTMLParagraphElement>("#status");
 const startButton = $<HTMLButtonElement>("#start");
 const flipButton = $<HTMLButtonElement>("#flip");
+const calibrateButton = $<HTMLButtonElement>("#calibrate");
 const recordButton = $<HTMLButtonElement>("#record");
 const exerciseSelect = $<HTMLSelectElement>("#exercise");
+const debugToggle = $<HTMLButtonElement>("#debug-toggle");
+const debugPanel = $<HTMLElement>("#debug");
+const debugText = $<HTMLPreElement>("#debug-text");
+const landmarksButton = $<HTMLButtonElement>("#record-landmarks");
+const resetCalibrationButton = $<HTMLButtonElement>("#reset-calibration");
 const sideEls = (side: Side) => ({
   reps: $<HTMLSpanElement>(`#reps-${side}`),
   match: $<HTMLSpanElement>(`#match-${side}`),
+  note: $<HTMLDivElement>(`#note-${side}`),
   bar: $<HTMLDivElement>(`#bar-${side}`),
   all: document.querySelectorAll<HTMLElement>(`[data-side="${side}"]`),
 });
@@ -45,25 +43,25 @@ const hud: Record<Side, ReturnType<typeof sideEls>> = { left: sideEls("left"), r
 const ctx = canvas.getContext("2d")!;
 const drawing = new DrawingUtils(ctx);
 
-interface SideState {
-  tracker: RepTracker<Frame>;
-  percent: number;
-  visible: boolean;
-  lastSeen: number;
-  /** Distance of the last completed rep from the golden rep, once there is one. */
-  lastDistance: number | null;
-}
-const newSideState = (): SideState => ({ tracker: new RepTracker<Frame>(), percent: 0, visible: false, lastSeen: 0, lastDistance: null });
+/**
+ * A hands-free step in progress: counting down until `armAt`, then either waiting for the first
+ * full rep (golden) or sampling each side's angle until `endAt` (calibrate).
+ */
+type Session =
+  | { kind: "golden"; armAt: number; armed: boolean }
+  | { kind: "calibrate"; armAt: number; endAt: number; armed: boolean; angles: Record<Side, number[]> };
 
 let exercise = EXERCISES[DEFAULT_EXERCISE];
-let sides: Record<Side, SideState> = { left: newSideState(), right: newSideState() };
+let tracker = new MotionTracker(exercise);
+let snapshots: Record<Side, SideSnapshot> | null = null;
+/** Distance of each side's last completed rep from the golden rep, once there is one. */
+let lastDistance: Record<Side, number | null> = { left: null, right: null };
 let golden: GoldenRep | null = loadGolden(exercise.name);
-/**
- * Set while recording a golden rep: counting down until `armAt`, then waiting for the first full rep.
- * `progress` collects how far each side gets, measured against the exercise's default range.
- */
-let recording: { armAt: number; armed: boolean; progress: Record<Side, number[]> } | null = null;
+let session: Session | null = null;
 let notice: { text: string; until: number } | null = null;
+let landmarkRecording: { startedAt: number; frames: RecordedFrame[] } | null = null;
+let frameIntervalMs = 0;
+let lastFrameAt = 0;
 
 // Back camera by default: a propped-up phone filming side-on is the main use case.
 let facingMode: "environment" | "user" = "environment";
@@ -83,11 +81,6 @@ function setStatus(text: string, isError = false): void {
 
 function showNotice(text: string, ms = 4000): void {
   notice = { text, until: performance.now() + ms };
-}
-
-/** Each side uses the range calibrated with the golden rep if it has one. Recording always uses the default. */
-function rangeFor(side: Side): AngleRange {
-  return (recording?.armed ? undefined : golden?.ranges?.[side]) ?? exercise.angleRange;
 }
 
 async function startCamera(): Promise<void> {
@@ -125,7 +118,7 @@ async function startCamera(): Promise<void> {
     setStatus(`Could not load the pose model: ${err}`, true);
     return;
   }
-  recordButton.disabled = false;
+  for (const button of [calibrateButton, recordButton, landmarksButton, resetCalibrationButton]) button.disabled = false;
   renderHud();
 
   if (!loopRunning) {
@@ -154,127 +147,216 @@ function draw(landmarks: NormalizedLandmark[] | null): void {
   drawing.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, { color: "#4cc38a", lineWidth });
   // Highlight each limb being measured in its side's colour.
   for (const side of SIDES) {
-    if (!sides[side].visible) continue;
+    if (!snapshots?.[side].visible) continue;
     const [a, b, c] = exercise.joints[side];
     drawing.drawConnectors(landmarks, [{ start: a, end: b }, { start: b, end: c }], { color: SIDE_COLOR[side], lineWidth: lineWidth * 2 });
   }
   drawing.drawLandmarks(landmarks, { color: "#e8eaed", radius: lineWidth, lineWidth: 1 });
 }
 
-function updateSide(side: Side, pose: Pose | null, now: number): void {
-  const state = sides[side];
-  const joints = exercise.joints[side];
-  state.visible = pose !== null && joints.every((id) => pose.image[id].visibility >= MIN_VISIBILITY);
-  if (!pose || !state.visible) {
-    if (now - state.lastSeen > HIDDEN_GRACE_MS) state.tracker.abandonRep();
-    return;
-  }
-  state.lastSeen = now;
-
-  // Rep progress uses the 3D joint angle, so it reads the same from the front as from the side.
-  const [a, b, c] = joints;
-  const angle = jointAngle(pose.world[a], pose.world[b], pose.world[c]);
-  if (recording?.armed) recording.progress[side].push(repProgress(angle, exercise.angleRange));
-  state.percent = angleToPercent(angle, rangeFor(side));
-
-  // Form scoring compares the limb's path in the image. Image landmarks are normalized 0-1 per axis,
-  // so convert to pixels or a non-square frame skews distances.
-  const toPixels = (id: number): Point => ({ x: pose.image[id].x * canvas.width, y: pose.image[id].y * canvas.height });
-
-  const rep = state.tracker.update(state.percent, sideFrame(toPixels, exercise, side));
-  if (!rep) return;
-  if (recording?.armed) {
-    finishRecording(side, rep, recording.progress);
-  } else if (golden) {
-    state.lastDistance = repDistance(golden.frames, rep);
-  }
-}
-
-function startRecording(): void {
-  recording = { armAt: performance.now() + RECORD_COUNTDOWN_MS, armed: false, progress: { left: [], right: [] } };
+function startSession(kind: Session["kind"]): void {
+  const armAt = performance.now() + COUNTDOWN_MS;
+  session =
+    kind === "golden"
+      ? { kind, armAt, armed: false }
+      : { kind, armAt, endAt: armAt + CALIBRATION_MS, armed: false, angles: { left: [], right: [] } };
   renderHud();
 }
 
-function finishRecording(side: Side, frames: Frame[], progress: Record<Side, number[]>): void {
-  // The pose model reads the two sides a few degrees apart, so each side that did the rep gets its
-  // own top-of-rep angle from how far it actually got.
-  const ranges: GoldenRep["ranges"] = {};
-  for (const s of SIDES) {
-    const range = calibratedRange(exercise.angleRange, furthestSustained(progress[s]));
-    if (range) ranges[s] = range;
-  }
-  golden = { side, frames, ranges };
-  recording = null;
+function finishGolden(side: Side, frames: Frame[]): void {
+  golden = { side, frames };
+  session = null;
   // Earlier scores were against the previous golden rep.
-  for (const s of SIDES) sides[s].lastDistance = null;
+  lastDistance = { left: null, right: null };
   const stored = saveGolden(exercise.name, golden);
-  const tops = SIDES.map((s) => `${s} ${ranges[s] ? `${Math.round(ranges[s][1])}°` : "not calibrated"}`).join(", ");
-  showNotice(`Golden rep saved from your ${side} side. Top of rep: ${tops}${stored ? "" : " (this visit only: the browser blocked storage)"}`, 8000);
+  showNotice(`Golden rep saved from your ${side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
+}
+
+const describeRange = ([rest, top]: AngleRange) => `${Math.round(rest)}°→${Math.round(top)}°`;
+
+function finishCalibration(angles: Record<Side, number[]>): void {
+  session = null;
+  const ranges = { left: calibrateRange(exercise.angleRange, angles.left), right: calibrateRange(exercise.angleRange, angles.right) };
+  if (!ranges.left && !ranges.right) {
+    showNotice("Calibration saw no full reps, so nothing changed. Make sure your arms are in view and try again.", 8000);
+    return;
+  }
+  // A side with no full rep in view goes back to the default rather than keeping a range from another camera position.
+  for (const side of SIDES) tracker.setRange(side, ranges[side]);
+  const parts = SIDES.map((side) => `${side} ${ranges[side] ? describeRange(ranges[side]) : "no full rep seen (default range)"}`);
+  showNotice(`Calibrated: ${parts.join(", ")}`, 8000);
+}
+
+function resetCalibration(): void {
+  for (const side of SIDES) tracker.setRange(side, null);
+}
+
+function handleSnapshots(snaps: Record<Side, SideSnapshot>, now: number): void {
+  for (const side of SIDES) {
+    const snap = snaps[side];
+    if (session?.kind === "calibrate" && session.armed && snap.updated && snap.angle !== null) {
+      session.angles[side].push(snap.angle);
+    }
+    if (!snap.completedRep) continue;
+    if (session?.kind === "golden" && session.armed) {
+      finishGolden(side, snap.completedRep);
+    } else if (golden) {
+      lastDistance[side] = repDistance(golden.frames, snap.completedRep);
+    }
+  }
+  if (session?.kind === "calibrate" && session.armed && now >= session.endAt) finishCalibration(session.angles);
 }
 
 function renderHud(): void {
   for (const side of SIDES) {
-    const state = sides[side];
+    const snap = snapshots?.[side];
     const els = hud[side];
-    els.reps.textContent = String(Math.floor(state.tracker.count));
-    els.bar.style.width = `${state.visible ? state.percent : 0}%`;
-    els.match.textContent = state.lastDistance === null ? "–" : `${matchPercent(state.lastDistance)}%`;
-    els.match.dataset.distance = state.lastDistance === null ? "" : state.lastDistance.toFixed(3);
-    els.all.forEach((el) => el.classList.toggle("hidden-side", !state.visible));
+    const distance = lastDistance[side];
+    els.reps.textContent = String(snap?.count ?? 0);
+    // A hidden side keeps its last value instead of dropping to zero.
+    els.bar.style.width = `${snap?.percent ?? 0}%`;
+    els.bar.classList.toggle("peaked", snap?.phase === "peaked");
+    els.match.textContent = distance === null ? "–" : `${matchPercent(distance)}%`;
+    els.match.dataset.distance = distance === null ? "" : distance.toFixed(3);
+    els.note.textContent = snap && !snap.visible ? "not visible" : "";
+    els.all.forEach((el) => el.classList.toggle("hidden-side", !snap?.visible));
   }
-  recordButton.textContent = recording ? "Cancel" : golden ? "Re-record golden rep" : "Record golden rep";
-  recordButton.classList.toggle("active", recording !== null);
+  calibrateButton.textContent = session?.kind === "calibrate" ? "Cancel" : "Calibrate";
+  calibrateButton.classList.toggle("active", session?.kind === "calibrate");
+  recordButton.textContent = session?.kind === "golden" ? "Cancel" : golden ? "Re-record golden rep" : "Record golden rep";
+  recordButton.classList.toggle("active", session?.kind === "golden");
+  if (detector) {
+    calibrateButton.disabled = session?.kind === "golden";
+    recordButton.disabled = session?.kind === "calibrate";
+  }
+  landmarksButton.textContent = landmarkRecording ? "Stop and save landmarks" : "Record landmarks";
+  landmarksButton.classList.toggle("active", landmarkRecording !== null);
 }
 
 function statusText(tracking: boolean, now: number): string {
-  if (recording) {
-    return recording.armed
-      ? "Recording — do one full rep, both sides together"
-      : `Get in position… ${Math.ceil((recording.armAt - now) / 1000)}`;
-  }
+  const seconds = (until: number) => Math.max(1, Math.ceil((until - now) / 1000));
+  if (session && !session.armed) return `Get in position… ${seconds(session.armAt)}`;
+  if (session?.kind === "golden") return "Recording — do one full rep";
+  if (session?.kind === "calibrate") return `Calibrating — slow full reps, arms straight to fully curled… ${seconds(session.endAt)}`;
   if (notice && now < notice.until) return notice.text;
   if (!tracking) return "No one in view — step into the frame";
   const base = `Tracking (${detector!.delegate})`;
+  if (!SIDES.some((side) => snapshots?.[side].calibrated)) return `${base} — tap Calibrate so each side is measured against its own range`;
   return golden ? base : `${base} — record a golden rep to score your form`;
+}
+
+function renderDebug(): void {
+  if (debugPanel.hidden) return;
+  const n = (value: number | null | undefined, places = 0) => (value === null || value === undefined ? "–" : value.toFixed(places));
+  const lines = [
+    `${frameIntervalMs ? (1000 / frameIntervalMs).toFixed(0) : "–"} fps   ${detector?.delegate ?? "–"}   video ${video.videoWidth}x${video.videoHeight}   ${facingMode === "user" ? "front" : "back"} camera`,
+  ];
+  for (const side of SIDES) {
+    const snap = snapshots?.[side];
+    if (!snap) continue;
+    lines.push(
+      "",
+      `${side.toUpperCase().padEnd(5)} ${snap.visible ? "visible" : "NOT VISIBLE"}   ${snap.phase}   reps ${snap.count}`,
+      `  joint visibility  ${snap.jointVisibility?.map((v) => v.toFixed(2)).join("  ") ?? "–"}`,
+      `  angle  3D raw ${n(snap.rawAngle, 1)}   smoothed ${n(snap.angle, 1)}   2D ${n(snap.angle2d, 1)}`,
+      `  range  ${describeRange(snap.range)} ${snap.calibrated ? "(calibrated)" : "(default)"}   bar ${n(snap.percent)}%`,
+    );
+  }
+  debugText.textContent = lines.join("\n");
+}
+
+function saveLandmarkRecording(): void {
+  if (!landmarkRecording) return;
+  const recording: LandmarkRecording & Record<string, unknown> = {
+    source: "form-trainer web app",
+    mirrored: false,
+    width: canvas.width,
+    height: canvas.height,
+    landmarkIds: RECORDED_LANDMARKS,
+    exercise: exercise.name,
+    camera: facingMode === "user" ? "front" : "back",
+    delegate: detector?.delegate,
+    frames: landmarkRecording.frames,
+  };
+  landmarkRecording = null;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(recording)], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `landmarks-${exercise.name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  showNotice(`Saved ${recording.frames.length} frames of landmarks`);
 }
 
 /** Runs once per new camera frame. */
 function onFrame(): void {
   if (detector && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
     const now = performance.now();
-    if (recording && !recording.armed && now >= recording.armAt) {
-      recording.armed = true;
+    if (lastFrameAt) frameIntervalMs = frameIntervalMs ? frameIntervalMs * 0.9 + (now - lastFrameAt) * 0.1 : now - lastFrameAt;
+    lastFrameAt = now;
+
+    if (session && !session.armed && now >= session.armAt) {
+      session.armed = true;
       // Whatever the limbs did while walking into position is not part of the golden rep.
-      for (const side of SIDES) sides[side].tracker.abandonRep();
+      if (session.kind === "golden") tracker.abandonReps();
     }
 
-    const pose = detector.detect(video, now);
-    for (const side of SIDES) updateSide(side, pose, now);
+    const pose: Pose | null = detector.detect(video, now);
+    snapshots = tracker.update(pose, now, { width: canvas.width, height: canvas.height });
+    handleSnapshots(snapshots, now);
+
+    if (landmarkRecording) {
+      landmarkRecording.frames.push(recordFrame(pose, now - landmarkRecording.startedAt));
+      if (now - landmarkRecording.startedAt >= MAX_LANDMARK_RECORDING_MS) saveLandmarkRecording();
+    }
+
     draw(pose?.image ?? null);
     renderHud();
+    renderDebug();
     setStatus(statusText(pose !== null, now));
   }
   video.requestVideoFrameCallback(onFrame);
 }
 
+function toggleSession(kind: Session["kind"]): void {
+  if (session?.kind === kind) {
+    session = null;
+    renderHud();
+  } else {
+    startSession(kind);
+  }
+}
+
 startButton.addEventListener("click", () => void startCamera());
 flipButton.addEventListener("click", () => {
   facingMode = facingMode === "environment" ? "user" : "environment";
+  // The other camera sees the body from a different position, so its ranges don't carry over.
+  resetCalibration();
   void startCamera();
 });
-recordButton.addEventListener("click", () => {
-  if (recording) {
-    recording = null;
-    renderHud();
-  } else {
-    startRecording();
-  }
+calibrateButton.addEventListener("click", () => toggleSession("calibrate"));
+recordButton.addEventListener("click", () => toggleSession("golden"));
+resetCalibrationButton.addEventListener("click", () => {
+  resetCalibration();
+  showNotice("Calibration reset to the default ranges");
+});
+landmarksButton.addEventListener("click", () => {
+  if (landmarkRecording) saveLandmarkRecording();
+  else landmarkRecording = { startedAt: performance.now(), frames: [] };
+  renderHud();
+});
+debugToggle.addEventListener("click", () => {
+  debugPanel.hidden = !debugPanel.hidden;
+  debugToggle.setAttribute("aria-expanded", String(!debugPanel.hidden));
+  renderDebug();
 });
 exerciseSelect.addEventListener("change", () => {
   exercise = EXERCISES[exerciseSelect.value];
-  sides = { left: newSideState(), right: newSideState() };
+  tracker = new MotionTracker(exercise);
+  snapshots = null;
+  lastDistance = { left: null, right: null };
   golden = loadGolden(exercise.name);
-  recording = null;
+  session = null;
   renderHud();
 });
 video.addEventListener("loadedmetadata", fitStage);

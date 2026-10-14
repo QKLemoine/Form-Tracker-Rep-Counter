@@ -108,7 +108,8 @@ h1 {
 }
 
 .unit,
-.match {
+.match,
+.side-note {
   font-size: 0.85rem;
   font-weight: 600;
 }
@@ -148,6 +149,11 @@ h1 {
   background: var(--side);
 }
 
+/* The top of the rep has registered; lowering back to rest will count it. */
+.bar-fill.peaked {
+  background: #fff;
+}
+
 .status {
   margin: 0;
   color: var(--muted);
@@ -174,7 +180,7 @@ select {
   background: var(--button);
   border: 0;
   border-radius: 999px;
-  padding: 12px 20px;
+  padding: 10px 16px;
   min-height: 44px;
 }
 
@@ -183,9 +189,42 @@ button#start {
   color: #0b1a12;
 }
 
-button#record.active {
+button.active {
   background: #f28b82;
   color: #2a0d0a;
+}
+
+button.quiet {
+  background: none;
+  color: var(--muted);
+  text-decoration: underline;
+  padding-inline: 8px;
+}
+
+.debug {
+  width: 100%;
+  max-width: 480px;
+}
+
+.debug[hidden] {
+  display: none;
+}
+
+.debug pre {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #1b1f25;
+  color: var(--fg);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-x: auto;
+}
+
+.debug-help {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
 }
 
 button:disabled {

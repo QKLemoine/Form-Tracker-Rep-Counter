@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  CALIBRATION_MARGIN_DEGREES,
   DEFAULT_EXERCISE,
   EXERCISES,
   SIDES,
   angleToPercent,
-  calibratedRange,
-  furthestSustained,
+  calibrateRange,
   jointAngle,
   repProgress,
   type Point,
@@ -60,7 +58,6 @@ describe("angleToPercent", () => {
     [[150, 50] as const, 160, 40],
     [[50, 150] as const, 40, 160],
   ])("clips to exactly 0 and 100 beyond %j", (range, beyondStart, beyondEnd) => {
-    // RepTracker compares against exactly 0 and 100.
     expect(angleToPercent(beyondStart, range)).toBe(0);
     expect(angleToPercent(beyondEnd, range)).toBe(100);
   });
@@ -68,6 +65,9 @@ describe("angleToPercent", () => {
 
 describe("calibration", () => {
   const curl = [150, 90] as const;
+  /** Angles sampled over two reps between `rest` and `top`, with the given per-frame noise. */
+  const reps = (rest: number, top: number, noise = 0) =>
+    Array.from({ length: 120 }, (_, i) => (rest + top) / 2 + ((rest - top) / 2) * Math.cos((i / 60) * 2 * Math.PI) + noise * Math.sin(i * 12.9898));
 
   it("repProgress is unclipped", () => {
     expect(repProgress(150, curl)).toBeCloseTo(0);
@@ -76,35 +76,62 @@ describe("calibration", () => {
     expect(repProgress(170, curl)).toBeCloseTo(-1 / 3);
   });
 
-  it("furthestSustained ignores a few outlier frames", () => {
-    const progress = [0, 0.5, 0.9, 0.9, 0.9, 0.9, 0.9, 3, 0.4];
-    expect(furthestSustained(progress)).toBe(0.9);
-    expect(furthestSustained([0.2, 0.7])).toBe(0.2);
-    expect(furthestSustained([])).toBe(-Infinity);
+  it("finds the range a limb actually covers", () => {
+    const [rest, top] = calibrateRange(curl, reps(170, 60))!;
+    expect(rest).toBeGreaterThan(160);
+    expect(rest).toBeLessThanOrEqual(170);
+    expect(top).toBeLessThan(70);
+    expect(top).toBeGreaterThanOrEqual(60);
   });
 
-  it("sets the peak just short of where the limb got to", () => {
-    // Reached 82 degrees (short of the default 90): the peak moves out to 90.
-    expect(calibratedRange(curl, repProgress(82, curl))).toEqual([150, 82 + CALIBRATION_MARGIN_DEGREES]);
-    // Reached 55 degrees: the peak tightens to 63, so a half curl no longer counts.
-    expect(calibratedRange(curl, repProgress(55, curl))).toEqual([150, 55 + CALIBRATION_MARGIN_DEGREES]);
+  it("gives each side its own range when the camera reads them differently", () => {
+    // The same real movement, read as 172->52 on one side and 165->88 on the other.
+    const left = calibrateRange(curl, reps(172, 52))!;
+    const right = calibrateRange(curl, reps(165, 88))!;
+    expect(angleToPercent(60, left)).toBeGreaterThan(90);
+    expect(angleToPercent(60, right)).toBe(100);
+    // With its own range the right side now reaches the top where the shared default left it short.
+    expect(angleToPercent(96, curl)).toBe(90);
+    expect(angleToPercent(96, right)).toBeGreaterThan(85);
+    // And the left side no longer fills early.
+    expect(angleToPercent(90, curl)).toBe(100);
+    expect(angleToPercent(90, left)).toBeLessThan(75);
+  });
+
+  it("is not thrown off by a few stray frames", () => {
+    const clean = calibrateRange(curl, reps(170, 60))!;
+    const withOutliers = calibrateRange(curl, [...reps(170, 60), 5, 8, 179, 180])!;
+    // The strays read 5-180 degrees; the range moves by a couple of degrees at most.
+    expect(Math.abs(withOutliers[0] - clean[0])).toBeLessThan(3);
+    expect(Math.abs(withOutliers[1] - clean[1])).toBeLessThan(3);
   });
 
   it("works for a range that runs upward", () => {
-    expect(calibratedRange([30, 130], repProgress(120, [30, 130]))).toEqual([30, 120 - CALIBRATION_MARGIN_DEGREES]);
+    const [rest, top] = calibrateRange([30, 130], reps(40, 120))!;
+    expect(rest).toBeLessThan(50);
+    expect(top).toBeGreaterThan(110);
   });
 
-  it("makes a rep that reaches the same position count as 100%", () => {
-    const range = calibratedRange(curl, repProgress(97, curl))!;
-    expect(angleToPercent(97, range)).toBe(100);
-    expect(angleToPercent(99, range)).toBe(100);
-    expect(angleToPercent(115, range)).toBeLessThan(100);
+  it("takes rest from where the limb usually hangs, not the extreme of its wobble", () => {
+    // Hanging at about 165 but wobbling out to 175 now and then, with one rep in the middle.
+    const hanging = (i: number) => 165 + (i % 7 === 0 ? 10 : 2 * Math.sin(i));
+    const angles = [...Array.from({ length: 80 }, (_, i) => hanging(i)), ...reps(165, 60).slice(0, 61), ...Array.from({ length: 80 }, (_, i) => hanging(i))];
+    const [rest] = calibrateRange(curl, angles)!;
+    expect(rest).toBeLessThan(170);
+    expect(rest).toBeGreaterThan(160);
   });
 
-  it("is null when the limb did not do the rep", () => {
-    expect(calibratedRange(curl, repProgress(140, curl))).toBeNull();
-    expect(calibratedRange(curl, -Infinity)).toBeNull();
-    expect(calibratedRange(curl, NaN)).toBeNull();
+  it("is null for half a movement, whose furthest point is not the top", () => {
+    const full = reps(170, 60).slice(0, 61); // rest -> top -> rest
+    expect(calibrateRange(curl, full)).not.toBeNull();
+    expect(calibrateRange(curl, full.slice(0, 22))).toBeNull(); // only the way up, stopping partway
+    expect(calibrateRange(curl, full.slice(40))).toBeNull(); // only the way down
+  });
+
+  it("is null when the limb did not do the movement", () => {
+    expect(calibrateRange(curl, reps(170, 155))).toBeNull();
+    expect(calibrateRange(curl, [170, 60])).toBeNull();
+    expect(calibrateRange(curl, [])).toBeNull();
   });
 });
 

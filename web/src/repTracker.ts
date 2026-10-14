@@ -1,51 +1,89 @@
-// Port of the rep-counting state machine in src/analytics/rep_tracker.py, one instance per body side.
-// Unlike Python it buffers every rep (not only once a golden rep exists), drops the buffer whenever
-// the limb is back at rest, and only starts a rep from rest, so a rep is never missing its beginning
-// or carrying leftover frames.
+// Rep-counting state machine, one instance per body side. It began as a port of
+// src/analytics/rep_tracker.py but no longer matches it: Python requires the bar to hit exactly
+// 100% then exactly 0%, which a noisy angle estimate often misses by a few degrees.
+
+export interface RepConfig {
+  /** At or above this percent the limb is at the top of the rep. */
+  topPercent: number;
+  /** At or below this percent the limb is at rest. */
+  restPercent: number;
+  /** Frames in a row a threshold must hold before it counts, so one stray frame can't flip the state. */
+  dwellFrames: number;
+  /** Anything faster than this, from leaving rest to returning, is a tracking glitch, not a rep. */
+  minRepMs: number;
+}
+
+// A limb at rest reads several degrees either side of its usual angle, so the rest band is wider than the top band.
+export const DEFAULT_REP_CONFIG: RepConfig = { topPercent: 85, restPercent: 25, dwellFrames: 2, minRepMs: 400 };
+
+/**
+ * - `unready`: waiting to see the limb at rest, so a rep already under way isn't counted as a full one.
+ * - `rest`: at rest.
+ * - `lifting`: left rest, not yet at the top.
+ * - `peaked`: reached the top; returning to rest completes the rep.
+ */
+export type RepPhase = "unready" | "rest" | "lifting" | "peaked";
 
 export class RepTracker<Frame> {
-  /** Completed reps; a rep that has reached the peak but not returned counts as a half. */
+  /** Completed reps. */
   count = 0;
-  /** True between reaching the peak and returning to rest (Python's `dir == 1`). */
-  pastPeak = false;
+  phase: RepPhase = "unready";
   private buffer: Frame[] = [];
-  /** False until the limb has been seen at rest, so a rep already under way is not counted as a full one. */
-  private ready = false;
+  private startedAt = 0;
+  private topStreak = 0;
+  private restStreak = 0;
+
+  constructor(private readonly config: RepConfig = DEFAULT_REP_CONFIG) {}
 
   /**
-   * Advance by one frame. `percent` is 0-100 through the rep, exactly 0 or 100 at the ends.
-   * Returns the frames of the rep that this frame completed, or null.
+   * Advance by one frame. `percent` is 0-100 through the rep. Returns the frames of the rep that
+   * this frame completed (from leaving rest to returning to it), or null.
    */
-  update(percent: number, frame: Frame): Frame[] | null {
-    if (!this.ready) {
-      if (percent !== 0) return null;
-      this.ready = true;
-    }
-    if (percent > 0 || this.pastPeak) {
-      this.buffer.push(frame);
-    } else {
-      this.buffer = [];
-    }
+  update(percent: number, frame: Frame, timeMs: number): Frame[] | null {
+    const { topPercent, restPercent, dwellFrames, minRepMs } = this.config;
+    this.topStreak = percent >= topPercent ? this.topStreak + 1 : 0;
+    this.restStreak = percent <= restPercent ? this.restStreak + 1 : 0;
+    const atTop = this.topStreak >= dwellFrames;
+    const atRest = this.restStreak >= dwellFrames;
 
-    if (percent === 100 && !this.pastPeak) {
-      this.count += 0.5;
-      this.pastPeak = true;
+    switch (this.phase) {
+      case "unready":
+        if (atRest) this.phase = "rest";
+        return null;
+      case "rest":
+        if (percent > restPercent) {
+          this.phase = "lifting";
+          this.buffer = [frame];
+          this.startedAt = timeMs;
+        }
+        return null;
+      case "lifting":
+        this.buffer.push(frame);
+        if (atTop) {
+          this.phase = "peaked";
+        } else if (atRest) {
+          this.phase = "rest"; // came back down without reaching the top
+          this.buffer = [];
+        }
+        return null;
+      case "peaked": {
+        this.buffer.push(frame);
+        if (!atRest) return null;
+        const rep = this.buffer;
+        this.phase = "rest";
+        this.buffer = [];
+        if (timeMs - this.startedAt < minRepMs) return null;
+        this.count += 1;
+        return rep;
+      }
     }
-    if (percent === 0 && this.pastPeak) {
-      this.count += 0.5;
-      this.pastPeak = false;
-      const rep = this.buffer;
-      this.buffer = [];
-      return rep;
-    }
-    return null;
   }
 
-  /** Forget a rep in progress (and its half count) without touching completed reps; the next rep must start from rest. */
+  /** Forget a rep in progress without touching completed reps; the next rep must start from rest. */
   abandonRep(): void {
-    this.ready = false;
+    this.phase = "unready";
     this.buffer = [];
-    this.pastPeak = false;
-    this.count = Math.floor(this.count);
+    this.topStreak = 0;
+    this.restStreak = 0;
   }
 }

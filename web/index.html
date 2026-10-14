@@ -20,11 +20,13 @@
               <div class="panel-name">Left</div>
               <div class="reps"><span id="reps-left">0</span> <span class="unit">reps</span></div>
               <div class="match">last rep <span id="match-left">–</span></div>
+              <div class="side-note" id="note-left"></div>
             </div>
             <div class="panel" data-side="right">
               <div class="panel-name">Right</div>
               <div class="reps"><span id="reps-right">0</span> <span class="unit">reps</span></div>
               <div class="match">last rep <span id="match-right">–</span></div>
+              <div class="side-note" id="note-right"></div>
             </div>
           </div>
           <div class="bars">
@@ -37,9 +39,19 @@
       <div class="controls">
         <button id="start" type="button">Start camera</button>
         <select id="exercise" aria-label="Exercise"></select>
+        <button id="calibrate" type="button" disabled>Calibrate</button>
         <button id="record" type="button" disabled>Record golden rep</button>
         <button id="flip" type="button" disabled>Flip camera</button>
+        <button id="debug-toggle" type="button" class="quiet" aria-expanded="false" aria-controls="debug">Debug</button>
       </div>
+      <section id="debug" class="debug" hidden>
+        <pre id="debug-text">Start the camera to see tracking values.</pre>
+        <div class="controls">
+          <button id="record-landmarks" type="button" disabled>Record landmarks</button>
+          <button id="reset-calibration" type="button" disabled>Reset calibration</button>
+        </div>
+        <p class="debug-help">Record landmarks saves joint coordinates (no video) to a file on this device, for diagnosing tracking problems.</p>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
