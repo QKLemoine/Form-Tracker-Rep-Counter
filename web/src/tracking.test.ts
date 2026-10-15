@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { EXERCISES, SIDES, calibrateRange, type AngleRange, type Side } from "./exercises";
+import { EXERCISES, SIDES, type AngleRange, type Side } from "./exercises";
 import leftFixture from "./fixtures/curl-side-left-mirrored.json";
 import rightFixture from "./fixtures/curl-side-right.json";
+import frontFixture from "./fixtures/curl-front-screenrec.json";
 import { repDistance, type Frame } from "./formScoring";
 import { playback, recordFrame, type LandmarkRecording } from "./recording";
 import { DEFAULT_TRACKING_CONFIG, MotionTracker, type PoseInput, type SideSnapshot } from "./tracking";
@@ -107,54 +108,141 @@ describe.each(SIDES)("recorded side-on curl, %s arm in view", (side) => {
   });
 });
 
+// A seated dumbbell curl filmed from the front by an iPhone propped low, both arms in view: landmarks
+// from a screen recording of the app (scripts/extract_landmarks.py --crop ... --step 2). The person
+// adjusts the phone and walks to and from it around 0-3 s and 19-26 s, and does 10 curls with both
+// arms together, the last six from 37 s on.
+describe("recorded front-view seated curl, both arms in view", () => {
+  const front = frontFixture as LandmarkRecording;
+  const run = (onFrame?: (t: number, tracker: MotionTracker) => void, config = DEFAULT_TRACKING_CONFIG) => {
+    const tracker = new MotionTracker(curl, config);
+    const events: { t: number; side: Side; event: NonNullable<SideSnapshot["calibrationEvent"]> }[] = [];
+    const history: { t: number; snaps: Record<Side, SideSnapshot> }[] = [];
+    for (const { t, pose } of playback(front)) {
+      onFrame?.(t, tracker);
+      const snaps = tracker.update(pose, t, front);
+      history.push({ t, snaps });
+      for (const side of SIDES) if (snaps[side].calibrationEvent) events.push({ t, side, event: snaps[side].calibrationEvent! });
+    }
+    return { events, history, last: history.at(-1)!.snaps };
+  };
+  const calibratedAt = (events: ReturnType<typeof run>["events"], side: Side) => events.find((e) => e.side === side && e.event.kind === "calibrated")?.t;
+
+  it("counts all ten curls on both arms, calibrating itself from the start", () => {
+    const { last, events } = run();
+    expect(last.left.count).toBe(10);
+    expect(last.right.count).toBe(10);
+    for (const side of SIDES) {
+      expect(last[side].calibrated).toBe(true);
+      expect(calibratedAt(events, side)).toBeLessThan(32000);
+    }
+  });
+
+  it("does not calibrate from movements made while getting into position", () => {
+    const rejected = run().events.filter((e) => e.event.kind === "rejected");
+    expect(rejected.length).toBeGreaterThan(0);
+    for (const { t, event } of rejected) {
+      expect(event).toEqual({ kind: "rejected", reason: "body swing" });
+      expect(t < 3000 || (t > 19000 && t < 26000)).toBe(true);
+    }
+  });
+
+  it("relearns both arms from the next three good reps when Calibrate is pressed", () => {
+    let pressed = false;
+    const { last, events } = run((t, tracker) => {
+      if (!pressed && t >= 25000) {
+        tracker.recalibrate();
+        pressed = true;
+      }
+    });
+    for (const side of SIDES) {
+      const relearnt = events.filter((e) => e.side === side && e.event.kind === "calibrated" && e.t > 25000);
+      expect(relearnt).toHaveLength(1);
+      expect(relearnt[0].t).toBeLessThan(40000);
+      expect(last[side].count).toBe(10);
+    }
+  });
+
+  it("once calibrated, holds a curled arm at a flat 100% most of the time instead of flickering under it", () => {
+    const shareAtFull = (history: ReturnType<typeof run>["history"], side: Side) => {
+      const curled = history.filter(({ t, snaps }) => t > 40000 && snaps[side].percent >= 70);
+      return curled.filter(({ snaps }) => snaps[side].percent === 100).length / curled.length;
+    };
+    const withInset = run().history;
+    const noInset = run(undefined, { ...DEFAULT_TRACKING_CONFIG, calibration: { ...DEFAULT_TRACKING_CONFIG.calibration, inset: 0 } }).history;
+    for (const side of SIDES) {
+      expect(shareAtFull(withInset, side)).toBeGreaterThan(0.6);
+      // With 100% at the furthest point reached, the bar spends much less of the top of each curl there.
+      expect(shareAtFull(withInset, side)).toBeGreaterThan(shareAtFull(noInset, side) + 0.15);
+    }
+  });
+});
+
 describe("the two recorded arms together", () => {
+  /** Each recorded clip holds one rep; three back-to-back replays let the tracker calibrate itself. */
+  const autoCalibrated = (side: Side) => {
+    const tracker = new MotionTracker(curl);
+    let run = replay(side, tracker);
+    for (let i = 0; i < 2; i++) run = replay(side, tracker, run.endMs + 2000);
+    return { tracker, run };
+  };
   const calibrated = (side: Side): AngleRange => {
-    const angles = replay(side)
-      .history[side].filter((snap) => snap.updated)
-      .map((snap) => snap.angle!);
-    return calibrateRange(curl.angleRange, angles)!;
+    const { run } = autoCalibrated(side);
+    expect(run.last[side].calibrated).toBe(true);
+    return run.last[side].range;
   };
 
+  it("calibrates each arm automatically from its first three reps", () => {
+    for (const side of SIDES) {
+      const tracker = new MotionTracker(curl);
+      const events: string[] = [];
+      let run = replay(side, tracker);
+      for (let i = 0; i < 3; i++) {
+        run.history[side].forEach((snap) => snap.calibrationEvent && events.push(snap.calibrationEvent.kind));
+        run = replay(side, tracker, run.endMs + 2000);
+      }
+      expect(events).toEqual(["rep", "rep", "calibrated"]);
+      expect(run.last[side].calibrated).toBe(true);
+      expect(run.last[side].calibrationProgress).toBeNull();
+      // The hidden arm never did a rep, so it is still learning, on the default range.
+      expect(run.last[other(side)].calibrated).toBe(false);
+      expect(run.last[other(side)].calibrationProgress).toEqual({ reps: 0, needed: 3 });
+    }
+  });
+
   it("the pose model reads the same movement differently on each side", () => {
-    // Same video, mirrored: a real curl is identical, yet the top reads about 10 degrees apart.
+    // Same video, mirrored: a real curl is identical, yet the top reads several degrees apart.
     expect(calibrated("left")[1] - calibrated("right")[1]).toBeGreaterThan(5);
   });
 
-  it("each side fills its own bar once calibrated, where a shared strict range fills only one", () => {
-    // A shared range tuned to the right arm leaves the left arm short of full.
-    const shared = calibrated("right");
-    const sharedTracker = new MotionTracker(curl);
-    sharedTracker.setRange("left", shared);
-    const leftOnShared = Math.max(...replay("left", sharedTracker).history.left.map((snap) => snap.percent));
-    expect(leftOnShared).toBeLessThan(95);
-
+  it("once calibrated, a full rep holds at a flat 100% instead of flickering just under it", () => {
+    /** The longest stretch, in frames, that the bar stays at exactly 100%. */
+    const longestFull = (history: SideSnapshot[]) => {
+      let best = 0;
+      let run = 0;
+      for (const snap of history) best = Math.max(best, (run = snap.percent === 100 ? run + 1 : 0));
+      return best;
+    };
     for (const side of SIDES) {
-      const tracker = new MotionTracker(curl);
-      tracker.setRange(side, calibrated(side));
-      const { last, history } = replay(side, tracker);
-      expect(last[side].calibrated).toBe(true);
-      expect(Math.max(...history[side].map((snap) => snap.percent))).toBeGreaterThan(97);
-      expect(last[side].count).toBe(1);
+      const holds: Record<string, number> = {};
+      for (const inset of [0, DEFAULT_TRACKING_CONFIG.calibration.inset]) {
+        const tracker = new MotionTracker(curl, { ...DEFAULT_TRACKING_CONFIG, calibration: { ...DEFAULT_TRACKING_CONFIG.calibration, inset } });
+        let run = replay(side, tracker);
+        for (let i = 0; i < 3; i++) run = replay(side, tracker, run.endMs + 2000);
+        holds[inset] = longestFull(run.history[side]);
+        expect(run.last[side].count).toBe(4);
+      }
+      // With 100% set at the furthest point reached, the bar barely touches it; pulled 10% inward, it holds there for the top of the rep.
+      expect(holds[DEFAULT_TRACKING_CONFIG.calibration.inset]).toBeGreaterThan(10);
+      expect(holds[DEFAULT_TRACKING_CONFIG.calibration.inset]).toBeGreaterThan(holds[0] * 2);
     }
   });
 
   it("after calibrating, still counts a rep that starts moments after the arm comes into view", () => {
     for (const side of SIDES) {
-      const tracker = new MotionTracker(curl);
-      tracker.setRange(side, calibrated(side));
+      const { tracker, run } = autoCalibrated(side);
       const lateStart = { ...recordings[side], frames: recordings[side].frames.slice(8) };
-      expect(feed(tracker, playback(lateStart), lateStart).last[side].count).toBe(1);
-    }
-  });
-
-  it("rejects a calibration window that caught only part of a rep", () => {
-    for (const side of SIDES) {
-      const angles = replay(side)
-        .history[side].filter((snap) => snap.updated)
-        .map((snap) => snap.angle!);
-      const top = angles.indexOf(Math.min(...angles));
-      expect(calibrateRange(curl.angleRange, angles.slice(top))).toBeNull(); // only the way down
-      expect(calibrateRange(curl.angleRange, angles.slice(0, top - 10))).toBeNull(); // only the way up
+      expect(feed(tracker, playback(lateStart), lateStart, run.endMs + 2000).last[side].count).toBe(run.last[side].count + 1);
     }
   });
 
@@ -233,20 +321,19 @@ describe("asymmetric ranges", () => {
     expect(Math.max(...history.right.map((snap) => snap.percent))).toBeLessThan(95);
   });
 
-  it("after calibration both bars track together and both reach full", () => {
-    const first = feed(new MotionTracker(curl), frames);
+  it("after calibrating itself from three reps, both bars track together and both reach full", () => {
     const tracker = new MotionTracker(curl);
-    for (const side of SIDES) {
-      const angles = first.history[side].filter((snap) => snap.updated).map((snap) => snap.angle!);
-      tracker.setRange(side, calibrateRange(curl.angleRange, angles));
-    }
-    const { history, last } = feed(tracker, frames);
+    const warmup = feed(tracker, frames);
+    const third = feed(tracker, frames, SQUARE, warmup.endMs + 1000);
+    expect(third.last.left.calibrated && third.last.right.calibrated).toBe(true);
+    const countsBefore = { left: third.last.left.count, right: third.last.right.count };
+    const { history, last } = feed(tracker, frames, SQUARE, third.endMs + 1000);
     for (let i = 12; i < frames.length; i += 5) {
       expect(Math.abs(history.left[i].percent - history.right[i].percent)).toBeLessThan(12);
     }
     for (const side of SIDES) {
-      expect(Math.max(...history[side].map((snap) => snap.percent))).toBeGreaterThan(97);
-      expect(last[side].count).toBe(2);
+      expect(Math.max(...history[side].map((snap) => snap.percent))).toBe(100);
+      expect(last[side].count - countsBefore[side]).toBe(2);
     }
   });
 });
@@ -276,13 +363,15 @@ describe("an arm that hangs short of its most extended reading", () => {
     expect(history.left.every((snap) => snap.phase === "unready")).toBe(true);
   });
 
-  it("is counted with the calibrated range and default settings", () => {
-    const range = calibrateRange(curl.angleRange, smoothed)!;
-    // Rest lands where the arm hangs, not at the brief full extension.
-    expect(range[0]).toBeLessThan(160);
+  it("is counted once the tracker has calibrated itself", () => {
     const tracker = new MotionTracker(curl);
-    tracker.setRange("left", range);
-    expect(feed(tracker, frames).last.left.count).toBe(3);
+    const warmup = [...Array.from({ length: 45 }, (_, i) => stretch(i)), ...session];
+    const first = feed(tracker, sequence(warmup.length, (i) => ({ left: { angle: warmup[i] }, right: { angle: 170 } })));
+    // Rest lands where the arm hangs, not at the brief full extension (10% inset included).
+    expect(first.last.left.calibrated).toBe(true);
+    expect(first.last.left.range[0]).toBeLessThan(160);
+    const { last } = feed(tracker, frames, SQUARE, first.endMs + 1000);
+    expect(last.left.count - first.last.left.count).toBe(3);
   });
 });
 
@@ -396,14 +485,29 @@ describe("occlusion", () => {
   });
 });
 
+describe("calibration and hidden limbs", () => {
+  it("does not stitch readings from before and after the limb was hidden into one calibration rep", () => {
+    // The arm curls to the top, disappears for two seconds, and reappears hanging at rest.
+    const up = [...hold(170, 15), ...sweep(170, 55).slice(0, 30)];
+    const tracker = new MotionTracker(curl);
+    const first = feed(tracker, sequence(up.length, (i) => ({ left: { angle: up[i] }, right: { angle: 170 } })));
+    const hidden = Array.from({ length: 60 }, (_, i) => ({ t: first.endMs + (i + 1) * FRAME_MS, pose: null }));
+    const gap = feed(tracker, hidden, SQUARE);
+    const back = feed(tracker, sequence(30, () => ({ left: { angle: 170 }, right: { angle: 170 } }), gap.endMs + FRAME_MS));
+    const events = [...first.history.left, ...gap.history.left, ...back.history.left].filter((snap) => snap.calibrationEvent);
+    expect(events).toEqual([]);
+    expect(back.last.left.calibrationProgress).toEqual({ reps: 0, needed: 3 });
+  });
+});
+
 describe("configuration and ranges", () => {
   it("starts on the exercise's default range and reports calibration", () => {
     const tracker = new MotionTracker(curl);
     const frame = sequence(1, () => ({ left: { angle: 170 }, right: { angle: 170 } }));
-    expect(feed(tracker, frame).last.left).toMatchObject({ range: curl.angleRange, calibrated: false });
+    expect(feed(tracker, frame).last.left).toMatchObject({ range: curl.angleRange, calibrated: false, calibrationProgress: { reps: 0, needed: 3 } });
     tracker.setRange("left", [168, 70]);
     const { last } = feed(tracker, frame, SQUARE, 100);
-    expect(last.left).toMatchObject({ range: [168, 70], calibrated: true });
+    expect(last.left).toMatchObject({ range: [168, 70], calibrated: true, calibrationProgress: null });
     expect(last.right.calibrated).toBe(false);
     tracker.setRange("left", null);
     expect(feed(tracker, frame, SQUARE, 200).last.left.calibrated).toBe(false);

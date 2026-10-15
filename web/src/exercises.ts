@@ -53,50 +53,14 @@ export function angleToPercent(angle: number, range: AngleRange): number {
   return Math.min(1, Math.max(0, repProgress(angle, range))) * 100;
 }
 
-/** A limb must travel at least this far during calibration, or it is taken as not having done the movement. */
-export const MIN_CALIBRATION_SPAN_DEGREES = 30;
-
-/**
- * The angle range one limb actually covers, as this camera reads it, from angles sampled in order
- * while the person does a few full reps. The pose model reads the two sides of the body, and
- * different camera positions, several degrees apart, so each side gets its own range instead of
- * sharing `defaults`.
- *
- * The top is the 95th percentile of progress, so a few stray frames can't set it. Rest is the
- * middle of the readings near the extended end, not the extreme: a limb at rest wobbles by several
- * degrees, and a rest angle taken from the far end of that wobble is one it rarely gets back to.
- *
- * Returns null unless the samples show a full rep (near rest, up to the top, back near rest),
- * since the furthest point of half a movement is not the top, or if the limb moved too little.
- */
-export function calibrateRange(defaults: AngleRange, angles: number[]): [number, number] | null {
-  if (angles.length < 10) return null;
-  const [start, end] = defaults;
-  const progress = angles.map((angle) => repProgress(angle, defaults));
-  const sorted = [...progress].sort((x, y) => x - y);
-  const at = (quantile: number) => sorted[Math.round(quantile * (sorted.length - 1))];
-  const [extended, top] = [at(0.05), at(0.95)];
-  const restCluster = sorted.filter((value) => value <= extended + 0.25 * (top - extended));
-  const rest = restCluster[Math.floor(restCluster.length / 2)];
-  if ((top - rest) * Math.abs(end - start) < MIN_CALIBRATION_SPAN_DEGREES) return null;
-
-  const nearRest = (value: number) => value <= rest + 0.25 * (top - rest);
-  const firstTop = progress.findIndex((value) => value >= top);
-  let lastTop = progress.length - 1;
-  while (progress[lastTop] < top) lastTop--;
-  if (!progress.slice(0, firstTop).some(nearRest) || !progress.slice(lastTop + 1).some(nearRest)) return null;
-
-  return [start + (end - start) * rest, start + (end - start) * top];
-}
-
 export const EXERCISES: Record<string, Exercise> = {
   bicep_curl: {
     name: "bicep_curl",
     label: "Bicep Curl",
     joints: { left: [11, 13, 15], right: [12, 14, 16] }, // shoulder, elbow, wrist
-    // Used until the person calibrates. The 3D estimate under-reads depth: a full curl bottoms out
-    // around 50-60 degrees filmed side-on but only about 82 filmed from the front, so the default
-    // peak is a loose 90 and a curl that stops at forearm-level counts until calibration tightens it.
+    // Used until each side has learnt its own range (see calibration.ts). The 3D estimate under-reads
+    // depth: a full curl bottoms out around 50-60 degrees filmed side-on but only about 82 filmed from
+    // the front, so the default peak is a loose 90.
     angleRange: [150, 90],
   },
   squat: {

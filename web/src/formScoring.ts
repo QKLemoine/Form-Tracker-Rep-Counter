@@ -75,3 +75,29 @@ export const ZERO_MATCH_DISTANCE = 0.6;
 export function matchPercent(distance: number): number {
   return Math.round(100 * Math.max(0, 1 - distance / ZERO_MATCH_DISTANCE));
 }
+
+/**
+ * The torso's lean from vertical in the image, in degrees, from one side's frame (its first point
+ * is the shoulder relative to the hip). Only sideways lean is visible: from the front, a swing
+ * toward or away from the camera barely shows.
+ */
+export function torsoLean(frame: Frame): number {
+  return (Math.atan2(frame[0], -frame[1]) * 180) / Math.PI;
+}
+
+/** How far the torso tilted during a rep, in degrees: a large value means the body swung to move the weight. */
+export function torsoSwing(frames: Frame[]): number {
+  const leans = frames.map(torsoLean);
+  return Math.max(...leans) - Math.min(...leans);
+}
+
+/** The most typical of several reps: the one closest, in total, to all the others. */
+export function mostTypicalRep(reps: Frame[][]): number {
+  let best = 0;
+  let bestTotal = Infinity;
+  reps.forEach((rep, i) => {
+    const total = reps.reduce((sum, other, j) => (i === j ? sum : sum + repDistance(other, rep)), 0);
+    if (total < bestTotal) [best, bestTotal] = [i, total];
+  });
+  return best;
+}

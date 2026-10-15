@@ -1,8 +1,9 @@
 // The page: camera, drawing and controls. All tracking decisions live in tracking.ts.
 
 import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
-import { DEFAULT_EXERCISE, EXERCISES, SIDES, calibrateRange, type AngleRange, type Side } from "./exercises";
-import { matchPercent, repDistance, type Frame } from "./formScoring";
+import { DEFAULT_CALIBRATION_CONFIG } from "./calibration";
+import { DEFAULT_EXERCISE, EXERCISES, SIDES, type AngleRange, type Side } from "./exercises";
+import { matchPercent, mostTypicalRep, repDistance, torsoSwing, type Frame } from "./formScoring";
 import { PoseDetector, type Pose } from "./pose";
 import { RECORDED_LANDMARKS, recordFrame, type LandmarkRecording, type RecordedFrame } from "./recording";
 import { loadGolden, saveGolden, type GoldenRep } from "./storage";
@@ -10,8 +11,8 @@ import { MotionTracker, type SideSnapshot } from "./tracking";
 
 /** Time to step back from the phone before recording or calibrating starts. */
 const COUNTDOWN_MS = 5000;
-/** How long calibration watches the reps. */
-const CALIBRATION_MS = 10000;
+/** Good reps a golden rep is chosen from; the most typical one is kept, so one sloppy rep can't become the reference. */
+const GOLDEN_REPS = 3;
 /** Landmark recordings stop by themselves after this long. */
 const MAX_LANDMARK_RECORDING_MS = 60000;
 const SIDE_COLOR: Record<Side, string> = { left: "#6cb6ff", right: "#ffd166" };
@@ -44,12 +45,15 @@ const ctx = canvas.getContext("2d")!;
 const drawing = new DrawingUtils(ctx);
 
 /**
- * A hands-free step in progress: counting down until `armAt`, then either waiting for the first
- * full rep (golden) or sampling each side's angle until `endAt` (calibrate).
+ * A hands-free step in progress: counting down until `armAt`, then either collecting good reps for
+ * the golden rep, or relearning each side's range from its next good reps (calibrate).
  */
 type Session =
-  | { kind: "golden"; armAt: number; armed: boolean }
-  | { kind: "calibrate"; armAt: number; endAt: number; armed: boolean; angles: Record<Side, number[]> };
+  | { kind: "golden"; armAt: number; armed: boolean; reps: { side: Side; frames: Frame[] }[] }
+  | { kind: "calibrate"; armAt: number; armed: boolean };
+
+/** If a side shows no good rep this long into calibrating, it is out of view or not exercising; stop waiting for it. */
+const CALIBRATION_WAIT_MS = 20000;
 
 let exercise = EXERCISES[DEFAULT_EXERCISE];
 let tracker = new MotionTracker(exercise);
@@ -156,55 +160,71 @@ function draw(landmarks: NormalizedLandmark[] | null): void {
 
 function startSession(kind: Session["kind"]): void {
   const armAt = performance.now() + COUNTDOWN_MS;
-  session =
-    kind === "golden"
-      ? { kind, armAt, armed: false }
-      : { kind, armAt, endAt: armAt + CALIBRATION_MS, armed: false, angles: { left: [], right: [] } };
+  session = kind === "golden" ? { kind, armAt, armed: false, reps: [] } : { kind, armAt, armed: false };
   renderHud();
 }
 
-function finishGolden(side: Side, frames: Frame[]): void {
+function finishGolden(reps: { side: Side; frames: Frame[] }[]): void {
+  const { side, frames } = reps[mostTypicalRep(reps.map((rep) => rep.frames))];
   golden = { side, frames };
   session = null;
   // Earlier scores were against the previous golden rep.
   lastDistance = { left: null, right: null };
   const stored = saveGolden(exercise.name, golden);
-  showNotice(`Golden rep saved from your ${side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
+  showNotice(`Golden rep saved: the most typical of your ${reps.length} reps, from your ${side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
 }
 
 const describeRange = ([rest, top]: AngleRange) => `${Math.round(rest)}°→${Math.round(top)}°`;
 
-function finishCalibration(angles: Record<Side, number[]>): void {
-  session = null;
-  const ranges = { left: calibrateRange(exercise.angleRange, angles.left), right: calibrateRange(exercise.angleRange, angles.right) };
-  if (!ranges.left && !ranges.right) {
-    showNotice("Calibration saw no full reps, so nothing changed. Make sure your arms are in view and try again.", 8000);
-    return;
-  }
-  // A side with no full rep in view goes back to the default rather than keeping a range from another camera position.
-  for (const side of SIDES) tracker.setRange(side, ranges[side]);
-  const parts = SIDES.map((side) => `${side} ${ranges[side] ? describeRange(ranges[side]) : "no full rep seen (default range)"}`);
-  showNotice(`Calibrated: ${parts.join(", ")}`, 8000);
+function resetCalibration(): void {
+  tracker.resetCalibration();
 }
 
-function resetCalibration(): void {
-  for (const side of SIDES) tracker.setRange(side, null);
+const capitalized = (side: Side) => side[0].toUpperCase() + side.slice(1);
+const span = ([rest, top]: AngleRange) => Math.abs(top - rest);
+
+function reportCalibration(side: Side, snaps: Record<Side, SideSnapshot>): void {
+  const event = snaps[side].calibrationEvent;
+  if (!event) return;
+  if (event.kind === "rejected") {
+    showNotice(`${capitalized(side)} rep not used for calibration: ${event.reason}`);
+  } else if (event.kind === "calibrated") {
+    let text = `${capitalized(side)} arm calibrated from ${DEFAULT_CALIBRATION_CONFIG.repsNeeded} reps: ${describeRange(event.range)}`;
+    const other = snaps[side === "left" ? "right" : "left"];
+    // A big difference in range between the sides is worth pointing out, though it may be real.
+    if (other.calibrated && Math.min(span(event.range), span(other.range)) < 0.6 * Math.max(span(event.range), span(other.range))) {
+      const smaller = span(event.range) < span(other.range) ? side : side === "left" ? "right" : "left";
+      text += `. Your ${smaller} arm moved through much less range than your other arm; recalibrate if that was a short rep.`;
+    }
+    showNotice(text, 8000);
+  }
 }
 
 function handleSnapshots(snaps: Record<Side, SideSnapshot>, now: number): void {
   for (const side of SIDES) {
-    const snap = snaps[side];
-    if (session?.kind === "calibrate" && session.armed && snap.updated && snap.angle !== null) {
-      session.angles[side].push(snap.angle);
-    }
-    if (!snap.completedRep) continue;
+    reportCalibration(side, snaps);
+    const rep = snaps[side].completedRep;
+    if (!rep) continue;
     if (session?.kind === "golden" && session.armed) {
-      finishGolden(side, snap.completedRep);
+      if (torsoSwing(rep) > DEFAULT_CALIBRATION_CONFIG.maxTorsoSwingDegrees) {
+        showNotice(`${capitalized(side)} rep not used for the golden rep: body swing`);
+        continue;
+      }
+      session.reps.push({ side, frames: rep });
+      if (session.reps.length >= GOLDEN_REPS) finishGolden(session.reps);
     } else if (golden) {
-      lastDistance[side] = repDistance(golden.frames, snap.completedRep);
+      lastDistance[side] = repDistance(golden.frames, rep);
     }
   }
-  if (session?.kind === "calibrate" && session.armed && now >= session.endAt) finishCalibration(session.angles);
+  // Calibrating is done once every side has its range, or has shown no good rep for a while.
+  if (session?.kind === "calibrate" && session.armed) {
+    const patient = now - session.armAt < CALIBRATION_WAIT_MS;
+    const waiting = SIDES.some((side) => tracker.isCalibrating(side) && (patient || snaps[side].calibrationProgress!.reps > 0));
+    if (!waiting) {
+      session = null;
+      tracker.stopCalibrating();
+    }
+  }
 }
 
 function renderHud(): void {
@@ -218,7 +238,8 @@ function renderHud(): void {
     els.bar.classList.toggle("peaked", snap?.phase === "peaked");
     els.match.textContent = distance === null ? "–" : `${matchPercent(distance)}%`;
     els.match.dataset.distance = distance === null ? "" : distance.toFixed(3);
-    els.note.textContent = snap && !snap.visible ? "not visible" : "";
+    const progress = snap?.calibrationProgress;
+    els.note.textContent = !snap ? "" : !snap.visible ? "not visible" : progress ? `calibrating ${progress.reps}/${progress.needed}` : "";
     els.all.forEach((el) => el.classList.toggle("hidden-side", !snap?.visible));
   }
   calibrateButton.textContent = session?.kind === "calibrate" ? "Cancel" : "Calibrate";
@@ -236,12 +257,16 @@ function renderHud(): void {
 function statusText(tracking: boolean, now: number): string {
   const seconds = (until: number) => Math.max(1, Math.ceil((until - now) / 1000));
   if (session && !session.armed) return `Get in position… ${seconds(session.armAt)}`;
-  if (session?.kind === "golden") return "Recording — do one full rep";
-  if (session?.kind === "calibrate") return `Calibrating — slow full reps, arms straight to fully curled… ${seconds(session.endAt)}`;
+  const progress = () =>
+    SIDES.filter((side) => snapshots?.[side].calibrationProgress)
+      .map((side) => `${side} ${snapshots![side].calibrationProgress!.reps}/${snapshots![side].calibrationProgress!.needed}`)
+      .join(", ");
+  if (session?.kind === "golden") return `Recording golden rep — do ${GOLDEN_REPS} good full reps (${session.reps.length}/${GOLDEN_REPS})`;
+  if (session?.kind === "calibrate") return `Calibrating — do ${DEFAULT_CALIBRATION_CONFIG.repsNeeded} slow full reps, arms straight to fully curled (${progress()})`;
   if (notice && now < notice.until) return notice.text;
   if (!tracking) return "No one in view — step into the frame";
   const base = `Tracking (${detector!.delegate})`;
-  if (!SIDES.some((side) => snapshots?.[side].calibrated)) return `${base} — tap Calibrate so each side is measured against its own range`;
+  if (SIDES.some((side) => snapshots?.[side].calibrationProgress && snapshots[side].visible)) return `${base} — learning your range from your first full reps (${progress()})`;
   return golden ? base : `${base} — record a golden rep to score your form`;
 }
 
@@ -259,7 +284,7 @@ function renderDebug(): void {
       `${side.toUpperCase().padEnd(5)} ${snap.visible ? "visible" : "NOT VISIBLE"}   ${snap.phase}   reps ${snap.count}`,
       `  joint visibility  ${snap.jointVisibility?.map((v) => v.toFixed(2)).join("  ") ?? "–"}`,
       `  angle  3D raw ${n(snap.rawAngle, 1)}   smoothed ${n(snap.angle, 1)}   2D ${n(snap.angle2d, 1)}`,
-      `  range  ${describeRange(snap.range)} ${snap.calibrated ? "(calibrated)" : "(default)"}   bar ${n(snap.percent)}%`,
+      `  range  ${describeRange(snap.range)} ${snap.calibrated ? "(calibrated)" : "(default)"}${snap.calibrationProgress ? ` learning ${snap.calibrationProgress.reps}/${snap.calibrationProgress.needed}` : ""}   bar ${n(snap.percent)}%`,
     );
   }
   debugText.textContent = lines.join("\n");
@@ -299,6 +324,7 @@ function onFrame(): void {
       session.armed = true;
       // Whatever the limbs did while walking into position is not part of the golden rep.
       if (session.kind === "golden") tracker.abandonReps();
+      else tracker.recalibrate();
     }
 
     const pose: Pose | null = detector.detect(video, now);
@@ -320,6 +346,7 @@ function onFrame(): void {
 
 function toggleSession(kind: Session["kind"]): void {
   if (session?.kind === kind) {
+    if (session.kind === "calibrate" && session.armed) tracker.stopCalibrating();
     session = null;
     renderHud();
   } else {
@@ -338,7 +365,7 @@ calibrateButton.addEventListener("click", () => toggleSession("calibrate"));
 recordButton.addEventListener("click", () => toggleSession("golden"));
 resetCalibrationButton.addEventListener("click", () => {
   resetCalibration();
-  showNotice("Calibration reset to the default ranges");
+  showNotice("Calibration reset: each side will relearn its range from your next full reps");
 });
 landmarksButton.addEventListener("click", () => {
   if (landmarkRecording) saveLandmarkRecording();
