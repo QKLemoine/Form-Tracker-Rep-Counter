@@ -99,13 +99,13 @@ Each exercise also gets its own golden-rep file (`golden_reps/<exercise>.npy` by
 How a rep is measured:
 
 - **3D angle.** Rep progress uses the angle between MediaPipe's estimated 3D joint positions. The desktop app measures the angle in the flat image, which closes too early when a limb swings toward the camera (a curl filmed from the front).
-- **Per-side calibration.** The 3D estimate is imperfect: for the same position it reads the two sides of the body about 10° apart, and it reads differently from different camera positions. Tap **Calibrate**, use the 5-second countdown to get into position, then do slow full reps for 10 seconds. Each side that completes a full rep gets its own rest and top angles; a side that doesn't keeps the default range (`150°→90°` for a curl). Calibration lasts until you reload the page, flip the camera or switch exercise, so redo it when you move the phone. Because each side is measured against its own range, a difference in range of motion between sides shows in the form score, not the bars.
+- **Automatic per-side calibration.** The 3D estimate is imperfect: for the same position it reads the two sides of the body about 10° apart, and it reads differently from different camera positions. So each side learns its own range from its first **3 good reps** — just start training; the panel shows `calibrating 1/3` until it's done, using the default range (`150°→90°` for a curl) meanwhile. Each rep is checked first: it must move at least 30°, take at least 0.6 seconds, and not involve the torso tilting more than 20° (a body swing; this only sees sideways lean, not swinging toward the camera). The range is the median of the 3 reps, so one sloppy rep is outvoted, and 0% and 100% are set 10% inside it so a full rep holds at a flat 100% instead of flickering just under it. If one side ends up with much less range than the other, the app says so. Tap **Calibrate** to relearn both sides from your next 3 good reps (5-second countdown first) — do that if you move the phone or a sloppy first rep set a bad range. Flipping the camera, switching exercise, **Reset calibration** in the debug panel, or reloading starts over. Because each side is measured against its own range, a difference in range of motion between sides shows in the form score, not the bars.
 - **Counting.** A rep counts when the bar goes above 85% and comes back below 25%, each for two frames in a row, taking at least 0.4 seconds, and starting from rest. The bar turns white once the top has registered. It does not need to hit exactly 100% and 0%.
 - **Hidden limbs.** A side only counts while the camera can see its joints (visibility above 0.6 to start, below 0.4 to stop, three frames each way). The pose model still guesses where a hidden limb is, and that guess moves like a real rep, so a hidden side is frozen, marked "not visible" and never counted. Filmed side-on, this makes it a one-arm session automatically. A rep in progress is dropped if its limb stays hidden for more than a second.
 
 Golden reps and scoring:
 
-- **Recording a golden rep:** tap **Record golden rep**, use the countdown to get into position, then do one full rep starting from rest. The first complete rep from either side is saved automatically, in the browser's storage on that device, one per exercise.
+- **Recording a golden rep:** tap **Record golden rep**, use the countdown to get into position, then do 3 good full reps. The app keeps the most typical of the three (the one closest to the other two), so one sloppy rep can't become the reference; a rep with a body swing isn't used. It's saved in the browser's storage on that device, one per exercise.
 - **Scoring:** every later rep is compared with the golden rep and shown as a match percentage. There is one golden rep for both sides — the other side is compared against its mirror image, so a weaker side shows up as a lower score. Scoring uses that side's shoulder, hip and tracked joints, aligned with Dynamic Time Warping so rep speed doesn't matter.
 - Record the golden rep from the same camera position you train from: a rep filmed from the front can't be compared with one filmed from the side.
 - The match percentage scale is a first guess: a replay of the same rep scores about 92–96%, but how low a genuinely bad rep scores has not been calibrated yet (`ZERO_MATCH_DISTANCE` in `web/src/formScoring.ts`).
@@ -116,6 +116,8 @@ Code layout: `web/src/tracking.ts` is the whole pipeline as a class with no came
 
 ```bash
 python -m scripts.extract_landmarks videos/clip.mov web/src/fixtures/clip.json
+# a screen recording of the app: crop to the camera area and skip the screen's duplicate frames
+python -m scripts.extract_landmarks videos/screen.mp4 web/src/fixtures/screen.json --crop X,Y,WIDTH,HEIGHT --step 2
 ```
 
 To run it locally and open it on your phone:
