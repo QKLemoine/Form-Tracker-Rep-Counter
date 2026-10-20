@@ -1,5 +1,7 @@
 # Biomechanical Form Tracker & Rep Counter
 
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/QKLemoine/badge.svg)](https://hub.xerj.org/contributors/QKLemoine)
+
 A computer vision application that utilizes spatial tracking and skeletal landmark detection to analyze workout biomechanics, count repetitions, and evaluate exercise form quality.
 
 ## Project Evolution
