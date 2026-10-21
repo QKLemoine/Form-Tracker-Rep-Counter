@@ -17,3 +17,8 @@ videos/
 web/node_modules/
 web/dist/
 web/public/mediapipe-wasm/
+# Spike outputs (e.g. results downloaded from Colab); the spike notebooks themselves are tracked
+notebooks/spikes/*
+!notebooks/spikes/*.ipynb
+spike_result*.json
+.ipynb_checkpoints/
