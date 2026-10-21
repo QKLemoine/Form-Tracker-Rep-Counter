@@ -22,3 +22,7 @@ notebooks/spikes/*
 !notebooks/spikes/*.ipynb
 spike_result*.json
 .ipynb_checkpoints/
+# SMPL / SMPL-X body models: licence forbids redistribution, keep them local only
+body_models/
+SMPL*.pkl
+SMPLX*.npz
