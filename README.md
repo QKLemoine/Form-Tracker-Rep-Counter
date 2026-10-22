@@ -14,6 +14,7 @@ To support advanced spatiotemporal analytics, I refactored the original monolith
 
 - **`/src/core/`**: Contains the pose tracking engine (`PoseEstimationModule`), responsible for reading frames and extracting normalized $(x,y)$ skeletal coordinates. (`HandTrackingModule` is unused and still on the legacy `mp.solutions` API, which mediapipe 1.x removed, so it no longer runs.)
 - **`/src/analytics/`**: Houses the mathematical models for evaluating movement quality — DTW-based form scoring (`form_scoring.py`) and the camera-independent rep-counting state machine (`rep_tracker.py`).
+- **`/src/posetrack.py`** and **`/schema/`**: The PoseTrack format shared with the web app. See [Phone / Web App](#phone--web-app).
 - **`/src/exercises.py`**: The exercise registry — each exercise defines its tracked joint triple, angle range, and display label. See [Exercises](#exercises) below.
 - **`/src/trainer_app.py`**: The main execution node that bridges the vision pipeline, scoring logic, and UI rendering.
 - **`/legacy/`**: Original tutorial scripts and early experimental monolithic code.
@@ -120,6 +121,12 @@ Code layout: `web/src/tracking.ts` is the whole pipeline as a class with no came
 python -m scripts.extract_landmarks videos/clip.mov web/src/fixtures/clip.json
 # a screen recording of the app: crop to the camera area and skip the screen's duplicate frames
 python -m scripts.extract_landmarks videos/screen.mp4 web/src/fixtures/screen.json --crop X,Y,WIDTH,HEIGHT --step 2
+```
+
+**PoseTrack format.** `schema/posetrack.schema.json` defines one format for a set's pose data, so live tracking and a heavier post-workout model can be scored by the same engine. Per frame it holds 12 joints' 3D positions, per-joint confidence, nine joint angles (elbows, shoulders, hips, knees, trunk lean) and whether each angle was measured or filled in; the header declares the coordinate frame, what "up" is and what the confidence numbers mean. `web/src/poseTrack.ts` and `src/posetrack.py` implement it, and a test keeps their angles in agreement. Convert a landmark recording with:
+
+```bash
+python -m src.posetrack web/src/fixtures/clip.json clip.posetrack.json --exercise bicep_curl
 ```
 
 To run it locally and open it on your phone:
