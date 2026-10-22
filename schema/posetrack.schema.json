@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "posetrack/v1",
+  "title": "PoseTrack",
+  "description": "One exercise set as joint positions, confidences and joint angles over time. Every pose source (MediaPipe live on the phone, GVHMR after the workout) writes this format, so one scoring engine reads them all. Implemented by web/src/poseTrack.ts and src/posetrack.py, which must agree; tests check both against this file. Never contains images or video.",
+  "type": "object",
+  "required": ["format", "version", "source", "exercise", "mirrored", "coordinateFrame", "up", "confidenceScale", "joints", "frames"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "posetrack" },
+    "version": { "const": 1 },
+    "source": {
+      "type": "string",
+      "description": "The pose model that produced the track, e.g. \"mediapipe-pose-full\" or \"gvhmr@ee960bb\"."
+    },
+    "clip": {
+      "type": "string",
+      "description": "Optional: the name of the video or landmark recording the track was made from."
+    },
+    "exercise": {
+      "type": ["string", "null"],
+      "description": "The exercise name as in web/src/exercises.ts (\"bicep_curl\", \"squat\"), or null if unknown."
+    },
+    "mirrored": {
+      "type": "boolean",
+      "description": "True if the video was flipped left-right before pose estimation (scripts/extract_landmarks.py --mirror). The pose model then sees a mirror image of the person, so everything in the track describes that mirror image: \"l_*\" joints and angles are the person's real right side and vice versa, and positions are in the flipped picture. Angles are unaffected apart from the side swap. False for anything estimated from the camera as it was filmed, including the web app's front camera, whose preview is flipped on screen but whose pose estimation is not."
+    },
+    "coordinateFrame": {
+      "enum": ["mediapipe_world", "gvhmr_world"],
+      "description": "The frame of every position and up vector, in metres. mediapipe_world: MediaPipe Pose world landmarks; origin midway between the hips (moves with the person), x toward the right of the image, y toward the bottom of the image, z away from the camera (smaller is nearer). Follows the camera, not gravity. gvhmr_world: GVHMR's global SMPL-X joints; y points up (against gravity as GVHMR estimates it), x and z are horizontal, origin and heading as GVHMR sets them. The two sources place joints differently (e.g. SMPL-X hip joints sit inside the pelvis), so positions are not comparable across sources at centimetre level; angles are the comparable quantity."
+    },
+    "up": {
+      "type": "object",
+      "description": "What trunk_lean is measured against.",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": ["device_gravity", "image_vertical", "model_gravity"],
+          "description": "device_gravity: the phone's accelerometer, rotated into the coordinate frame. image_vertical: the top of the picture (only as upright as the phone). model_gravity: the pose model's own estimate of gravity (GVHMR)."
+        },
+        "vector": {
+          "$ref": "#/$defs/vec3",
+          "description": "Unit up vector in coordinateFrame, when it is the same for every frame. Otherwise every frame carries its own \"up\"."
+        }
+      }
+    },
+    "confidenceScale": {
+      "enum": ["mediapipe_visibility", "vitpose_heatmap"],
+      "description": "What the per-joint confidence numbers are. They are not on a common scale: a MediaPipe visibility of 0.4 and a ViTPose heatmap score of 0.4 do not mean the same thing, so thresholds are set per scale. mediapipe_visibility: 0-1 likelihood the landmark is visible in the image. vitpose_heatmap: ViTPose 2D heatmap peak, usually 0-1 but can slightly exceed 1."
+    },
+    "joints": {
+      "const": ["l_shoulder", "r_shoulder", "l_elbow", "r_elbow", "l_wrist", "r_wrist", "l_hip", "r_hip", "l_knee", "r_knee", "l_ankle", "r_ankle"],
+      "description": "The order of a frame's positions and confidence arrays. \"l\" and \"r\" are the person's own left and right (see mirrored). These are MediaPipe Pose landmarks 11-16 and 23-28, and the matching COCO17 / SMPL-X joints."
+    },
+    "bodyProfile": {
+      "type": "object",
+      "description": "Optional: the person's bone lengths in metres, separate from the per-side angle range calibration. GVHMR gives one body shape per clip, so its profile is one set per track.",
+      "required": ["source", "boneLengths"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "description": "What measured them, e.g. \"gvhmr@ee960bb betas\" or \"mediapipe-pose-full median\"." },
+        "boneLengths": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "upper_arm: shoulder-elbow. forearm: elbow-wrist. thigh: hip-knee. shin: knee-ankle.",
+          "properties": {
+            "l_upper_arm": { "$ref": "#/$defs/length" },
+            "r_upper_arm": { "$ref": "#/$defs/length" },
+            "l_forearm": { "$ref": "#/$defs/length" },
+            "r_forearm": { "$ref": "#/$defs/length" },
+            "l_thigh": { "$ref": "#/$defs/length" },
+            "r_thigh": { "$ref": "#/$defs/length" },
+            "l_shin": { "$ref": "#/$defs/length" },
+            "r_shin": { "$ref": "#/$defs/length" }
+          }
+        }
+      }
+    },
+    "frames": { "type": "array", "items": { "$ref": "#/$defs/frame" } }
+  },
+  "if": { "properties": { "up": { "not": { "required": ["vector"] } } } },
+  "then": { "properties": { "frames": { "items": { "required": ["up"] } } } },
+  "$defs": {
+    "vec3": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+    "length": { "type": "number", "exclusiveMinimum": 0 },
+    "angle": {
+      "oneOf": [{ "type": "number", "minimum": 0, "maximum": 180 }, { "type": "null" }]
+    },
+    "origin": {
+      "enum": ["observed", "interpolated", "rep_prior", null],
+      "description": "observed: measured from this frame's pose. interpolated: filled in across a short gap from the frames either side. rep_prior: filled in from the person's earlier reps. null exactly when the angle is null."
+    },
+    "frame": {
+      "type": "object",
+      "required": ["t", "positions", "confidence", "angles", "origin"],
+      "additionalProperties": false,
+      "properties": {
+        "t": { "type": "number", "minimum": 0, "description": "Milliseconds since the track started." },
+        "positions": {
+          "oneOf": [{ "type": "array", "items": { "$ref": "#/$defs/vec3" }, "minItems": 12, "maxItems": 12 }, { "type": "null" }],
+          "description": "Each joint's 3D position in coordinateFrame, in the order of \"joints\"; null when no one is in view. Kept so later analyses (e.g. knee valgus, the position-based scorer, new angles) need no rerun of the pose model."
+        },
+        "confidence": {
+          "oneOf": [{ "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 12, "maxItems": 12 }, { "type": "null" }],
+          "description": "Each joint's confidence on confidenceScale, in the order of \"joints\"; null when no one is in view. An angle's confidence is the minimum over the joints it is measured from (listed under \"angles\")."
+        },
+        "up": { "$ref": "#/$defs/vec3", "description": "This frame's unit up vector, when the header has none." },
+        "angles": {
+          "type": "object",
+          "description": "Interior joint angles in degrees (0-180), measured in 3D from positions; null when no one is in view. elbow: shoulder-elbow-wrist. shoulder: hip-shoulder-elbow (the upper arm's angle to the torso; catches the elbow drifting forward in a curl). hip: shoulder-hip-knee. knee: hip-knee-ankle. trunk_lean: angle between the up vector and the line from the hip midpoint to the shoulder midpoint; 0 is upright, measured from l_shoulder, r_shoulder, l_hip, r_hip. trunk_lean is unsigned: it does not say whether the lean is forward, back or sideways. A signed sagittal lean (forward vs back) is a planned addition, since it matters for the squat; positions make it computable for existing tracks. A degenerate angle (two joints at the same point) reads 180.",
+          "required": ["l_elbow", "r_elbow", "l_shoulder", "r_shoulder", "l_hip", "r_hip", "l_knee", "r_knee", "trunk_lean"],
+          "additionalProperties": false,
+          "properties": {
+            "l_elbow": { "$ref": "#/$defs/angle" },
+            "r_elbow": { "$ref": "#/$defs/angle" },
+            "l_shoulder": { "$ref": "#/$defs/angle" },
+            "r_shoulder": { "$ref": "#/$defs/angle" },
+            "l_hip": { "$ref": "#/$defs/angle" },
+            "r_hip": { "$ref": "#/$defs/angle" },
+            "l_knee": { "$ref": "#/$defs/angle" },
+            "r_knee": { "$ref": "#/$defs/angle" },
+            "trunk_lean": { "$ref": "#/$defs/angle" }
+          }
+        },
+        "origin": {
+          "type": "object",
+          "description": "Where each angle came from.",
+          "required": ["l_elbow", "r_elbow", "l_shoulder", "r_shoulder", "l_hip", "r_hip", "l_knee", "r_knee", "trunk_lean"],
+          "additionalProperties": false,
+          "properties": {
+            "l_elbow": { "$ref": "#/$defs/origin" },
+            "r_elbow": { "$ref": "#/$defs/origin" },
+            "l_shoulder": { "$ref": "#/$defs/origin" },
+            "r_shoulder": { "$ref": "#/$defs/origin" },
+            "l_hip": { "$ref": "#/$defs/origin" },
+            "r_hip": { "$ref": "#/$defs/origin" },
+            "l_knee": { "$ref": "#/$defs/origin" },
+            "r_knee": { "$ref": "#/$defs/origin" },
+            "trunk_lean": { "$ref": "#/$defs/origin" }
+          }
+        }
+      }
+    }
+  }
+}

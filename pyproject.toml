@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "jsonschema>=4.23"]
 
 [project.scripts]
 form-trainer = "src.trainer_app:main"

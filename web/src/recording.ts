@@ -25,7 +25,7 @@ export interface LandmarkRecording {
   frames: RecordedFrame[];
 }
 
-const round = (value: number, places: number) => Math.round(value * 10 ** places) / 10 ** places;
+export const round = (value: number, places: number) => Math.round(value * 10 ** places) / 10 ** places;
 
 export function recordFrame(pose: PoseInput | null, t: number): RecordedFrame {
   if (!pose) return { t: round(t, 1), image: null, world: null };
