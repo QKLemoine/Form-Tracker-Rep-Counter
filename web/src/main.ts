@@ -1,13 +1,15 @@
 // The page: camera, drawing and controls. All tracking decisions live in tracking.ts.
 
 import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { angleFrames, angleMatchPercent, angleRepDistance } from "./angleScoring";
 import { DEFAULT_CALIBRATION_CONFIG } from "./calibration";
 import { DEFAULT_EXERCISE, EXERCISES, SIDES, type AngleRange, type Side } from "./exercises";
-import { matchPercent, mostTypicalRep, repDistance, torsoSwing, type Frame } from "./formScoring";
+import { matchPercent, mostTypicalRep, repDistance, torsoSwing } from "./formScoring";
 import { PoseDetector, type Pose } from "./pose";
-import { RECORDED_LANDMARKS, recordFrame, type LandmarkRecording, type RecordedFrame } from "./recording";
-import { loadGolden, saveGolden, type GoldenRep } from "./storage";
-import { MotionTracker, type SideSnapshot } from "./tracking";
+import { mediapipeHeader } from "./poseTrack";
+import { RECORDED_LANDMARKS, recordFrame, round, type LandmarkRecording, type RecordedFrame } from "./recording";
+import { loadAngleGolden, loadGolden, saveAngleGolden, saveGolden, type AngleGoldenRep, type GoldenRep } from "./storage";
+import { MotionTracker, type RepSample, type SideSnapshot } from "./tracking";
 
 /** Time to step back from the phone before recording or calibrating starts. */
 const COUNTDOWN_MS = 5000;
@@ -16,6 +18,16 @@ const GOLDEN_REPS = 3;
 /** Landmark recordings stop by themselves after this long. */
 const MAX_LANDMARK_RECORDING_MS = 60000;
 const SIDE_COLOR: Record<Side, string> = { left: "#6cb6ff", right: "#ffd166" };
+/** The pose model PoseDetector loads by default, as recorded in PoseTrack headers. */
+const POSE_SOURCE = "mediapipe-pose-full";
+
+/**
+ * Which scorer the page shows and records golden reps for: joint angles by default, or the older
+ * position-based one with ?scorer=position. Each keeps its own golden rep; the debug panel shows
+ * both scores whenever both golden reps exist, to compare them on the same reps.
+ */
+type Scorer = "angle" | "position";
+const scorer: Scorer = new URLSearchParams(location.search).get("scorer") === "position" ? "position" : "angle";
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const stage = $<HTMLDivElement>("#stage");
@@ -49,7 +61,7 @@ const drawing = new DrawingUtils(ctx);
  * the golden rep, or relearning each side's range from its next good reps (calibrate).
  */
 type Session =
-  | { kind: "golden"; armAt: number; armed: boolean; reps: { side: Side; frames: Frame[] }[] }
+  | { kind: "golden"; armAt: number; armed: boolean; reps: { side: Side; samples: RepSample[] }[] }
   | { kind: "calibrate"; armAt: number; armed: boolean };
 
 /** If a side shows no good rep this long into calibrating, it is out of view or not exercising; stop waiting for it. */
@@ -58,9 +70,15 @@ const CALIBRATION_WAIT_MS = 20000;
 let exercise = EXERCISES[DEFAULT_EXERCISE];
 let tracker = new MotionTracker(exercise);
 let snapshots: Record<Side, SideSnapshot> | null = null;
-/** Distance of each side's last completed rep from the golden rep, once there is one. */
-let lastDistance: Record<Side, number | null> = { left: null, right: null };
+const noDistances = (): Record<Side, Record<Scorer, number | null>> => ({ left: { angle: null, position: null }, right: { angle: null, position: null } });
+/** Distance of each side's last completed rep from each scorer's golden rep, once there is one. */
+let lastDistance = noDistances();
+/** The position scorer's golden rep (stored as v2). */
 let golden: GoldenRep | null = loadGolden(exercise.name);
+/** The angle scorer's golden rep (stored as v3). */
+let angleGolden: AngleGoldenRep | null = loadAngleGolden(exercise.name);
+const hasGolden = () => (scorer === "angle" ? angleGolden : golden) !== null;
+const percentFor = (kind: Scorer, distance: number) => (kind === "angle" ? angleMatchPercent(distance) : matchPercent(distance));
 let session: Session | null = null;
 let notice: { text: string; until: number } | null = null;
 let landmarkRecording: { startedAt: number; frames: RecordedFrame[] } | null = null;
@@ -164,13 +182,26 @@ function startSession(kind: Session["kind"]): void {
   renderHud();
 }
 
-function finishGolden(reps: { side: Side; frames: Frame[] }[]): void {
-  const { side, frames } = reps[mostTypicalRep(reps.map((rep) => rep.frames))];
-  golden = { side, frames };
+/** Keep the most typical of the reps as the active scorer's golden rep. The other scorer's golden rep is left as it is. */
+function finishGolden(reps: { side: Side; samples: RepSample[] }[]): void {
+  let side: Side;
+  let stored: boolean;
+  if (scorer === "angle") {
+    const chosen = reps[mostTypicalRep(reps.map((rep) => angleFrames(rep.samples.map((s) => s.pose), exercise, rep.side)), angleRepDistance)];
+    const startedAt = chosen.samples[0].pose.t;
+    const frames = chosen.samples.map(({ pose }) => ({ ...pose, t: round(pose.t - startedAt, 1) }));
+    side = chosen.side;
+    angleGolden = { side, track: { ...mediapipeHeader(POSE_SOURCE, exercise.name, false), frames } };
+    stored = saveAngleGolden(exercise.name, angleGolden);
+  } else {
+    const chosen = reps[mostTypicalRep(reps.map((rep) => rep.samples.map((s) => s.position)))];
+    side = chosen.side;
+    golden = { side, frames: chosen.samples.map((s) => s.position) };
+    stored = saveGolden(exercise.name, golden);
+  }
   session = null;
   // Earlier scores were against the previous golden rep.
-  lastDistance = { left: null, right: null };
-  const stored = saveGolden(exercise.name, golden);
+  lastDistance = noDistances();
   showNotice(`Golden rep saved: the most typical of your ${reps.length} reps, from your ${side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
 }
 
@@ -206,14 +237,18 @@ function handleSnapshots(snaps: Record<Side, SideSnapshot>, now: number): void {
     const rep = snaps[side].completedRep;
     if (!rep) continue;
     if (session?.kind === "golden" && session.armed) {
-      if (torsoSwing(rep) > DEFAULT_CALIBRATION_CONFIG.maxTorsoSwingDegrees) {
+      if (torsoSwing(rep.map((s) => s.position)) > DEFAULT_CALIBRATION_CONFIG.maxTorsoSwingDegrees) {
         showNotice(`${capitalized(side)} rep not used for the golden rep: body swing`);
         continue;
       }
-      session.reps.push({ side, frames: rep });
+      session.reps.push({ side, samples: rep });
       if (session.reps.length >= GOLDEN_REPS) finishGolden(session.reps);
-    } else if (golden) {
-      lastDistance[side] = repDistance(golden.frames, rep);
+    } else {
+      if (golden) lastDistance[side].position = repDistance(golden.frames, rep.map((s) => s.position));
+      if (angleGolden) {
+        const goldenAngles = angleFrames(angleGolden.track.frames, exercise, angleGolden.side);
+        lastDistance[side].angle = angleRepDistance(goldenAngles, angleFrames(rep.map((s) => s.pose), exercise, side));
+      }
     }
   }
   // Calibrating is done once every side has its range, or has shown no good rep for a while.
@@ -231,12 +266,12 @@ function renderHud(): void {
   for (const side of SIDES) {
     const snap = snapshots?.[side];
     const els = hud[side];
-    const distance = lastDistance[side];
+    const distance = lastDistance[side][scorer];
     els.reps.textContent = String(snap?.count ?? 0);
     // A hidden side keeps its last value instead of dropping to zero.
     els.bar.style.width = `${snap?.percent ?? 0}%`;
     els.bar.classList.toggle("peaked", snap?.phase === "peaked");
-    els.match.textContent = distance === null ? "–" : `${matchPercent(distance)}%`;
+    els.match.textContent = distance === null ? "–" : `${percentFor(scorer, distance)}%`;
     els.match.dataset.distance = distance === null ? "" : distance.toFixed(3);
     const progress = snap?.calibrationProgress;
     els.note.textContent = !snap ? "" : !snap.visible ? "not visible" : progress ? `calibrating ${progress.reps}/${progress.needed}` : "";
@@ -244,7 +279,7 @@ function renderHud(): void {
   }
   calibrateButton.textContent = session?.kind === "calibrate" ? "Cancel" : "Calibrate";
   calibrateButton.classList.toggle("active", session?.kind === "calibrate");
-  recordButton.textContent = session?.kind === "golden" ? "Cancel" : golden ? "Re-record golden rep" : "Record golden rep";
+  recordButton.textContent = session?.kind === "golden" ? "Cancel" : hasGolden() ? "Re-record golden rep" : "Record golden rep";
   recordButton.classList.toggle("active", session?.kind === "golden");
   if (detector) {
     calibrateButton.disabled = session?.kind === "golden";
@@ -267,14 +302,20 @@ function statusText(tracking: boolean, now: number): string {
   if (!tracking) return "No one in view — step into the frame";
   const base = `Tracking (${detector!.delegate})`;
   if (SIDES.some((side) => snapshots?.[side].calibrationProgress && snapshots[side].visible)) return `${base} — learning your range from your first full reps (${progress()})`;
-  return golden ? base : `${base} — record a golden rep to score your form`;
+  return hasGolden() ? base : `${base} — record a golden rep to score your form`;
 }
 
 function renderDebug(): void {
   if (debugPanel.hidden) return;
   const n = (value: number | null | undefined, places = 0) => (value === null || value === undefined ? "–" : value.toFixed(places));
+  const score = (side: Side, kind: Scorer) => {
+    const distance = lastDistance[side][kind];
+    if (distance === null) return "–";
+    return `${percentFor(kind, distance)}% (${kind === "angle" ? `${distance.toFixed(1)}°` : distance.toFixed(3)})`;
+  };
   const lines = [
     `${frameIntervalMs ? (1000 / frameIntervalMs).toFixed(0) : "–"} fps   ${detector?.delegate ?? "–"}   video ${video.videoWidth}x${video.videoHeight}   ${facingMode === "user" ? "front" : "back"} camera`,
+    `scorer ${scorer}${scorer === "angle" ? " (?scorer=position for the old one)" : ""}   golden rep: angle ${angleGolden ? angleGolden.side : "none"}, position ${golden ? golden.side : "none"}`,
   ];
   for (const side of SIDES) {
     const snap = snapshots?.[side];
@@ -285,6 +326,7 @@ function renderDebug(): void {
       `  joint visibility  ${snap.jointVisibility?.map((v) => v.toFixed(2)).join("  ") ?? "–"}`,
       `  angle  3D raw ${n(snap.rawAngle, 1)}   smoothed ${n(snap.angle, 1)}   2D ${n(snap.angle2d, 1)}`,
       `  range  ${describeRange(snap.range)} ${snap.calibrated ? "(calibrated)" : "(default)"}${snap.calibrationProgress ? ` learning ${snap.calibrationProgress.reps}/${snap.calibrationProgress.needed}` : ""}   bar ${n(snap.percent)}%`,
+      `  last rep  angle ${score(side, "angle")}   position ${score(side, "position")}`,
     );
   }
   debugText.textContent = lines.join("\n");
@@ -381,8 +423,9 @@ exerciseSelect.addEventListener("change", () => {
   exercise = EXERCISES[exerciseSelect.value];
   tracker = new MotionTracker(exercise);
   snapshots = null;
-  lastDistance = { left: null, right: null };
+  lastDistance = noDistances();
   golden = loadGolden(exercise.name);
+  angleGolden = loadAngleGolden(exercise.name);
   session = null;
   renderHud();
 });

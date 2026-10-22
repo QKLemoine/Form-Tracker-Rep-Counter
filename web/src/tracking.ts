@@ -6,6 +6,7 @@ import { DEFAULT_CALIBRATION_CONFIG, RangeCalibrator, type CalibrationConfig, ty
 import { SIDES, angleToPercent, jointAngle, type AngleRange, type Exercise, type Point, type Side } from "./exercises";
 import { HysteresisGate, OneEuroFilter } from "./filters";
 import { sideFrame, torsoLean, type Frame } from "./formScoring";
+import { frameFromPose, type PoseTrackFrame } from "./poseTrack";
 import { DEFAULT_REP_CONFIG, RepTracker, type RepConfig, type RepPhase } from "./repTracker";
 
 /** One pose, indexable by MediaPipe landmark id. */
@@ -48,6 +49,12 @@ export const DEFAULT_TRACKING_CONFIG: TrackingConfig = {
   calibration: DEFAULT_CALIBRATION_CONFIG,
 };
 
+/** One frame of a rep, in the form each scorer reads: image positions (formScoring.ts) and the PoseTrack frame (angleScoring.ts). */
+export interface RepSample {
+  position: Frame;
+  pose: PoseTrackFrame;
+}
+
 /** Something calibration did on this frame, for the page to tell the person about. */
 export type CalibrationEvent =
   | { kind: "rep"; reps: number; needed: number }
@@ -77,13 +84,13 @@ export interface SideSnapshot {
   phase: RepPhase;
   count: number;
   /** The frames of the rep completed on this frame, for form scoring, or null. */
-  completedRep: Frame[] | null;
+  completedRep: RepSample[] | null;
 }
 
 class SideTracker {
   private readonly gate: HysteresisGate;
   private readonly filter: OneEuroFilter;
-  private readonly reps: RepTracker<Frame>;
+  private readonly reps: RepTracker<RepSample>;
   private calibratedRange: AngleRange | null = null;
   /** Set while this side is learning its range. */
   private calibrator: RangeCalibrator | null = null;
@@ -98,7 +105,7 @@ class SideTracker {
   ) {
     this.gate = new HysteresisGate(config.visibilityEnter, config.visibilityExit, config.visibilityFrames);
     this.filter = new OneEuroFilter(config.filterMinCutoff, config.filterBeta);
-    this.reps = new RepTracker<Frame>(config.rep);
+    this.reps = new RepTracker<RepSample>(config.rep);
     if (config.autoCalibrate) this.startCalibrating();
   }
 
@@ -131,7 +138,8 @@ class SideTracker {
     this.reps.abandonRep();
   }
 
-  update(pose: PoseInput | null, timeMs: number, imageSize: { width: number; height: number }): SideSnapshot {
+  /** `trackFrame` is this frame as PoseTrack, shared by both sides. */
+  update(pose: PoseInput | null, trackFrame: PoseTrackFrame, timeMs: number, imageSize: { width: number; height: number }): SideSnapshot {
     const joints = this.exercise.joints[this.side];
     const jointVisibility = pose ? joints.map((id) => pose.image[id].visibility ?? 0) : null;
     const leastVisible = jointVisibility ? Math.min(...jointVisibility) : 0;
@@ -146,14 +154,14 @@ class SideTracker {
     // A frame is only used while the side is visible and this frame itself is confident: the pose
     // model still reports a guessed position for a hidden limb, and that guess moves like a real rep.
     const usable = pose !== null && rawAngle !== null && visible && leastVisible >= this.config.visibilityExit;
-    let completedRep: Frame[] | null = null;
+    let completedRep: RepSample[] | null = null;
     let calibrationEvent: CalibrationEvent | null = null;
     if (usable) {
       if (timeMs - this.lastUsedAt > this.config.filterResetMs) this.filter.reset();
       this.angle = this.filter.filter(rawAngle, timeMs);
       this.percent = angleToPercent(this.angle, this.range);
       const frame = sideFrame(toPixels, this.exercise, this.side);
-      completedRep = this.reps.update(this.percent, frame, timeMs);
+      completedRep = this.reps.update(this.percent, { position: frame, pose: trackFrame }, timeMs);
       this.lastUsedAt = timeMs;
 
       const calibrationRep = this.calibrator?.add(this.angle, timeMs, torsoLean(frame));
@@ -205,7 +213,8 @@ export class MotionTracker {
 
   /** Advance by one camera frame. `pose` is null when no one is in view. */
   update(pose: PoseInput | null, timeMs: number, imageSize: { width: number; height: number }): Record<Side, SideSnapshot> {
-    return { left: this.sides.left.update(pose, timeMs, imageSize), right: this.sides.right.update(pose, timeMs, imageSize) };
+    const trackFrame = frameFromPose(pose, timeMs);
+    return { left: this.sides.left.update(pose, trackFrame, timeMs, imageSize), right: this.sides.right.update(pose, trackFrame, timeMs, imageSize) };
   }
 
   /** Use a fixed range for one side, or null to go back to the exercise's default. */

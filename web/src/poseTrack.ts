@@ -113,9 +113,14 @@ export function observedFrame(t: number, positions: Vec3[] | null, confidence: n
   return { t, positions, confidence, angles, origin };
 }
 
-/** One frame from a live MediaPipe pose (null when no one is in view), measured against the image's vertical. */
+/**
+ * One frame from a live MediaPipe pose (null when no one is in view), measured against the image's
+ * vertical. MediaPipe always returns every landmark; a pose missing any joint (a partial test pose)
+ * gives an empty frame.
+ */
 export function frameFromPose(pose: PoseInput | null, t: number): PoseTrackFrame {
-  if (!pose) return observedFrame(round(t, 1), null, null, MEDIAPIPE_IMAGE_UP);
+  const complete = pose !== null && JOINTS.every((joint) => pose.world[MEDIAPIPE_LANDMARK[joint]] && pose.image[MEDIAPIPE_LANDMARK[joint]]);
+  if (!complete) return observedFrame(round(t, 1), null, null, MEDIAPIPE_IMAGE_UP);
   const positions = JOINTS.map((joint) => {
     const p = pose.world[MEDIAPIPE_LANDMARK[joint]];
     return [round(p.x, 4), round(p.y, 4), round(p.z, 4)] as Vec3;

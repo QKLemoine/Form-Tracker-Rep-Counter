@@ -5,7 +5,7 @@ import rightFixture from "./fixtures/curl-side-right.json";
 import frontFixture from "./fixtures/curl-front-screenrec.json";
 import { repDistance, type Frame } from "./formScoring";
 import { playback, recordFrame, type LandmarkRecording } from "./recording";
-import { DEFAULT_TRACKING_CONFIG, MotionTracker, type PoseInput, type SideSnapshot } from "./tracking";
+import { DEFAULT_TRACKING_CONFIG, MotionTracker, type PoseInput, type RepSample, type SideSnapshot } from "./tracking";
 
 const curl = EXERCISES.bicep_curl;
 const FRAME_MS = 33;
@@ -13,7 +13,10 @@ const SQUARE = { width: 1000, height: 1000 };
 
 interface Run {
   last: Record<Side, SideSnapshot>;
+  /** Each completed rep's position frames (formScoring.ts). */
   reps: Record<Side, Frame[][]>;
+  /** Each completed rep in full, with its PoseTrack frames. */
+  samples: Record<Side, RepSample[][]>;
   /** Every snapshot, per side, in order. */
   history: Record<Side, SideSnapshot[]>;
   endMs: number;
@@ -21,13 +24,17 @@ interface Run {
 
 /** Feeds poses through a tracker one frame at a time and collects what comes out. */
 function feed(tracker: MotionTracker, frames: { t: number; pose: PoseInput | null }[], size = SQUARE, startMs = 0): Run {
-  const run: Run = { last: undefined!, reps: { left: [], right: [] }, history: { left: [], right: [] }, endMs: startMs };
+  const run: Run = { last: undefined!, reps: { left: [], right: [] }, samples: { left: [], right: [] }, history: { left: [], right: [] }, endMs: startMs };
   for (const { t, pose } of frames) {
     run.endMs = startMs + t;
     run.last = tracker.update(pose, run.endMs, size);
     for (const side of SIDES) {
       run.history[side].push(run.last[side]);
-      if (run.last[side].completedRep) run.reps[side].push(run.last[side].completedRep!);
+      const rep = run.last[side].completedRep;
+      if (rep) {
+        run.reps[side].push(rep.map((sample) => sample.position));
+        run.samples[side].push(rep);
+      }
     }
   }
   return run;

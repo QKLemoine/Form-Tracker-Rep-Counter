@@ -16,6 +16,9 @@ export const SIDES: readonly Side[] = ["left", "right"];
 export const SHOULDER: Record<Side, number> = { left: 11, right: 12 };
 export const HIP: Record<Side, number> = { left: 23, right: 24 };
 
+/** A joint angle measured on one body side (or, for trunk_lean, across both), named without its side. */
+export type BodyAngle = "elbow" | "shoulder" | "hip" | "knee" | "trunk_lean";
+
 export interface Exercise {
   name: string;
   label: string;
@@ -23,6 +26,8 @@ export interface Exercise {
   joints: Record<Side, readonly [number, number, number]>;
   /** Default interior degrees (0-180), measured in 3D: [angle at rest = 0% of the rep, angle at the peak = 100%]. */
   angleRange: AngleRange;
+  /** The angles the angle-based form scorer compares, for the side doing the rep. */
+  scoredAngles: readonly BodyAngle[];
   /** True while the range is an uncalibrated placeholder. */
   experimental?: boolean;
 }
@@ -62,12 +67,15 @@ export const EXERCISES: Record<string, Exercise> = {
     // depth: a full curl bottoms out around 50-60 degrees filmed side-on but only about 82 filmed from
     // the front, so the default peak is a loose 90.
     angleRange: [150, 90],
+    // The shoulder angle catches the elbow drifting forward; trunk lean catches a swing.
+    scoredAngles: ["elbow", "shoulder", "trunk_lean"],
   },
   squat: {
     name: "squat",
     label: "Squat",
     joints: { left: [23, 25, 27], right: [24, 26, 28] }, // hip, knee, ankle
     angleRange: [170, 90],
+    scoredAngles: ["knee", "hip", "trunk_lean"],
     experimental: true,
   },
 };

@@ -1,5 +1,7 @@
-// Form scoring: the approach of src/analytics/form_scoring.py (centre on the hip, scale by torso
-// length, align with Dynamic Time Warping), applied to one body side at a time.
+// Position-based form scoring: the approach of src/analytics/form_scoring.py (centre on the hip,
+// scale by torso length, align with Dynamic Time Warping), applied to one body side at a time. The
+// app now scores on joint angles (angleScoring.ts); this scorer stays behind ?scorer=position, with
+// its golden reps stored as v2, to compare the two on the same reps.
 
 import { HIP, SHOULDER, type Exercise, type Point, type Side } from "./exercises";
 
@@ -37,8 +39,9 @@ function frameDistance(a: Frame, b: Frame): number {
 /**
  * Exact Dynamic Time Warping: the mean distance between aligned frames along the cheapest
  * alignment of the two sequences, so reps done at different speeds still compare. Lower is closer.
+ * `distance` compares two frames; Euclidean by default.
  */
-export function dtwDistance(a: Frame[], b: Frame[]): number {
+export function dtwDistance(a: Frame[], b: Frame[], distance: (a: Frame, b: Frame) => number = frameDistance): number {
   if (a.length === 0 || b.length === 0) return Infinity;
   // Rolling rows of [accumulated cost, alignment length]; ties prefer the diagonal, then a, then b.
   let cost = new Array<number>(b.length + 1).fill(Infinity);
@@ -52,7 +55,7 @@ export function dtwDistance(a: Frame[], b: Frame[]): number {
       let bestSteps = steps[j - 1];
       if (cost[j] < best) [best, bestSteps] = [cost[j], steps[j]];
       if (nextCost[j - 1] < best) [best, bestSteps] = [nextCost[j - 1], nextSteps[j - 1]];
-      nextCost[j] = best + frameDistance(a[i - 1], b[j - 1]);
+      nextCost[j] = best + distance(a[i - 1], b[j - 1]);
       nextSteps[j] = bestSteps + 1;
     }
     [cost, steps] = [nextCost, nextSteps];
@@ -91,12 +94,12 @@ export function torsoSwing(frames: Frame[]): number {
   return Math.max(...leans) - Math.min(...leans);
 }
 
-/** The most typical of several reps: the one closest, in total, to all the others. */
-export function mostTypicalRep(reps: Frame[][]): number {
+/** The most typical of several reps: the one closest, in total, to all the others, by `distance` (repDistance by default). */
+export function mostTypicalRep(reps: Frame[][], distance: (golden: Frame[], rep: Frame[]) => number = repDistance): number {
   let best = 0;
   let bestTotal = Infinity;
   reps.forEach((rep, i) => {
-    const total = reps.reduce((sum, other, j) => (i === j ? sum : sum + repDistance(other, rep)), 0);
+    const total = reps.reduce((sum, other, j) => (i === j ? sum : sum + distance(other, rep)), 0);
     if (total < bestTotal) [best, bestTotal] = [i, total];
   });
   return best;
