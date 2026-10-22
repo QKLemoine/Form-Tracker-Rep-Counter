@@ -315,7 +315,7 @@ function renderDebug(): void {
   };
   const lines = [
     `${frameIntervalMs ? (1000 / frameIntervalMs).toFixed(0) : "–"} fps   ${detector?.delegate ?? "–"}   video ${video.videoWidth}x${video.videoHeight}   ${facingMode === "user" ? "front" : "back"} camera`,
-    `scorer ${scorer}${scorer === "angle" ? " (?scorer=position for the old one)" : ""}   golden rep: angle ${angleGolden ? angleGolden.side : "none"}, position ${golden ? golden.side : "none"}`,
+    `scorer ${scorer} · golden angle ${angleGolden?.side ?? "none"}, position ${golden?.side ?? "none"}`,
   ];
   for (const side of SIDES) {
     const snap = snapshots?.[side];
