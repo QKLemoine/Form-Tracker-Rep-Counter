@@ -6,9 +6,10 @@
 // scaling. What they cannot see is anything that keeps the angles but moves the limb, such as a
 // knee caving inward (valgus) at an unchanged knee angle; PoseTrack keeps positions for that.
 
-import { dtwDistance, type Frame } from "./formScoring";
-import type { BodyAngle, Exercise, Side } from "./exercises";
+import { SIDES, type BodyAngle, type Exercise, type Side } from "./exercises";
+import { dtwDistance, mostTypicalRep, type Frame } from "./formScoring";
 import type { AngleName, PoseTrackFrame } from "./poseTrack";
+import type { RepSample } from "./tracking";
 
 /** One side's scored angles in one frame, in degrees, in the exercise's scoredAngles order. */
 export type AngleFrame = number[];
@@ -48,4 +49,40 @@ export const ZERO_MATCH_DEGREES = 15;
 /** A rep's angle distance from the golden rep as a 0-100 match score. */
 export function angleMatchPercent(distance: number): number {
   return Math.round(100 * Math.max(0, 1 - distance / ZERO_MATCH_DEGREES));
+}
+
+// Golden reps are kept per arm: the pose model reads the two arms a few degrees apart, which on the
+// recorded front-view curls made the other arm's good reps score as badly as half reps on the
+// golden rep's own arm. Against its own arm's golden rep, every good rep scored above every half rep.
+
+/** A good rep collected while recording golden reps. */
+export interface CollectedRep {
+  side: Side;
+  samples: RepSample[];
+  /** When it completed, in the tracker's milliseconds. */
+  at: number;
+}
+
+/** For each arm with at least `needed` reps, the most typical of its first `needed` reps by angle distance. */
+export function goldenRepsPerArm(reps: readonly CollectedRep[], exercise: Exercise, needed: number): Partial<Record<Side, RepSample[]>> {
+  const chosen: Partial<Record<Side, RepSample[]>> = {};
+  for (const side of SIDES) {
+    const mine = reps.filter((rep) => rep.side === side).slice(0, needed);
+    if (mine.length < needed) continue;
+    const frames = mine.map((rep) => angleFrames(rep.samples.map((s) => s.pose), exercise, side));
+    chosen[side] = mine[mostTypicalRep(frames, angleRepDistance)].samples;
+  }
+  return chosen;
+}
+
+/**
+ * Whether recording golden reps should keep going: some arm still has fewer than `needed` reps and
+ * has done a good rep within the last `patienceMs` (counting from `startedAt` before its first). An
+ * arm out of view, or not exercising, is given up on after that long.
+ */
+export function collectingGoldenReps(reps: readonly CollectedRep[], startedAt: number, now: number, needed: number, patienceMs: number): boolean {
+  return SIDES.some((side) => {
+    const mine = reps.filter((rep) => rep.side === side);
+    return mine.length < needed && now - (mine.at(-1)?.at ?? startedAt) < patienceMs;
+  });
 }

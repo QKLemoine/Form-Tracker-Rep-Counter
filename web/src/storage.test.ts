@@ -78,16 +78,39 @@ describe("v3 golden reps (angle scorer)", () => {
     expect(parseAngleGolden(JSON.stringify(value))).toBeNull();
   });
 
-  it("is stored under its own key and never touches the v2 golden rep", () => {
+  const memoryStorage = () => {
     const items = new Map<string, string>();
     vi.stubGlobal("localStorage", { getItem: (k: string) => items.get(k) ?? null, setItem: (k: string, v: string) => void items.set(k, v) });
+    return items;
+  };
+
+  it("keeps one per arm under its own key, and never touches the v2 golden rep", () => {
+    const items = memoryStorage();
     saveGolden("bicep_curl", golden);
     const v2Before = items.get("form-trainer:golden:v2:bicep_curl");
+    const left = { ...angleGolden, side: "left" as const };
     expect(saveAngleGolden("bicep_curl", angleGolden)).toBe(true);
-    expect(saveAngleGolden("bicep_curl", { ...angleGolden, side: "left" })).toBe(true);
+    expect(saveAngleGolden("bicep_curl", left)).toBe(true);
     expect(items.get("form-trainer:golden:v2:bicep_curl")).toBe(v2Before);
     expect(loadGolden("bicep_curl")).toEqual(golden);
-    expect(loadAngleGolden("bicep_curl")).toEqual({ ...angleGolden, side: "left" });
-    expect([...items.keys()].sort()).toEqual(["form-trainer:golden:v2:bicep_curl", "form-trainer:golden:v3:bicep_curl"]);
+    expect(loadAngleGolden("bicep_curl", "right")).toEqual(angleGolden);
+    expect(loadAngleGolden("bicep_curl", "left")).toEqual(left);
+    expect(loadAngleGolden("squat", "left")).toBeNull();
+    expect([...items.keys()].sort()).toEqual([
+      "form-trainer:golden:v2:bicep_curl",
+      "form-trainer:golden:v3:bicep_curl:left",
+      "form-trainer:golden:v3:bicep_curl:right",
+    ]);
+  });
+
+  it("still reads a golden rep stored before there was one per arm, for its own arm only, and leaves it in place", () => {
+    const items = memoryStorage();
+    items.set("form-trainer:golden:v3:bicep_curl", JSON.stringify(angleGolden));
+    expect(loadAngleGolden("bicep_curl", "right")).toEqual(angleGolden);
+    expect(loadAngleGolden("bicep_curl", "left")).toBeNull();
+    const newer = { ...angleGolden, track: { ...angleGolden.track, frames: [frame(140)] } };
+    saveAngleGolden("bicep_curl", newer);
+    expect(loadAngleGolden("bicep_curl", "right")).toEqual(newer);
+    expect(items.get("form-trainer:golden:v3:bicep_curl")).toBe(JSON.stringify(angleGolden));
   });
 });

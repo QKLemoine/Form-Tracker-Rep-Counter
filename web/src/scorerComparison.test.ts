@@ -63,11 +63,11 @@ function halfRep(rep: Rep): Rep {
 }
 
 const front = repsOf(frontFixture as LandmarkRecording);
-// As the app does it: one golden rep from the first good reps, whichever arm they came from.
+// As the app did before golden reps were per arm: one golden rep from the first good reps, whichever arm.
 const frontGolden = goldens(front);
 const frontScores = front.map((rep) => score(frontGolden, rep));
 const halfScores = front.map((rep) => score(frontGolden, halfRep(rep)));
-// For comparison: a golden rep per arm, each scored only against that arm's reps.
+// As the app does it now for the angle scorer: a golden rep per arm, each scoring only that arm's reps.
 const ownGolden = { left: goldens(front.filter((rep) => rep.side === "left")), right: goldens(front.filter((rep) => rep.side === "right")) };
 const ownScores = front.map((rep) => score(ownGolden[rep.side], rep));
 const ownHalfScores = front.map((rep) => score(ownGolden[rep.side], halfRep(rep)));
@@ -79,7 +79,7 @@ if (report) {
   const pair = (s: ReturnType<typeof score>) => `${String(s.anglePercent).padStart(4)}% ${s.angle.toFixed(1).padStart(4)}°  ${String(s.positionPercent).padStart(4)}% ${s.position.toFixed(3)}`;
   const row = (label: string, ...scores: ReturnType<typeof score>[]) => `${label.padEnd(28)} ${scores.map(pair).join("   |  ")}`;
   const lines = [
-    `${"".padEnd(28)} one golden rep (app)            |  golden rep per arm`,
+    `${"".padEnd(28)} one golden rep (before)         |  golden rep per arm (app now)`,
     `${"rep".padEnd(28)} angle        position           |  angle        position`,
     `golden reps: app angle #${front.indexOf(frontGolden.angle) + 1}, position #${front.indexOf(frontGolden.position) + 1}; ` +
       SIDES.map((side) => `${side} angle #${front.indexOf(ownGolden[side].angle) + 1}, position #${front.indexOf(ownGolden[side].position) + 1}`).join("; "),

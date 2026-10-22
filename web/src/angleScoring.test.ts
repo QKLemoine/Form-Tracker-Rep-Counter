@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { angleFrames, angleMatchPercent, angleRepDistance, ZERO_MATCH_DEGREES, type AngleFrame } from "./angleScoring";
-import { EXERCISES } from "./exercises";
+import {
+  angleFrames,
+  angleMatchPercent,
+  angleRepDistance,
+  collectingGoldenReps,
+  goldenRepsPerArm,
+  ZERO_MATCH_DEGREES,
+  type AngleFrame,
+  type CollectedRep,
+} from "./angleScoring";
+import { EXERCISES, type Side } from "./exercises";
 import { ANGLES, type AngleName, type PoseTrackFrame } from "./poseTrack";
 
 const curl = EXERCISES.bicep_curl;
@@ -45,5 +54,40 @@ describe("angleMatchPercent", () => {
     expect(angleMatchPercent(ZERO_MATCH_DEGREES / 2)).toBe(50);
     expect(angleMatchPercent(ZERO_MATCH_DEGREES * 2)).toBe(0);
     expect(angleMatchPercent(Infinity)).toBe(0);
+  });
+});
+
+describe("golden reps per arm", () => {
+  /** A curl on one arm whose elbow bottoms out at `top` degrees, completed at `at` ms. */
+  const curlRep = (side: Side, top: number, at: number): CollectedRep => ({
+    side,
+    at,
+    samples: Array.from({ length: 9 }, (_, i) => {
+      const elbow = 150 - (150 - top) * Math.sin((i / 8) * Math.PI);
+      return { position: [], pose: frame({ [side === "left" ? "l_elbow" : "r_elbow"]: elbow }) };
+    }),
+  });
+
+  it("picks each arm's most typical rep from its own first three, and skips an arm with fewer", () => {
+    const reps = [curlRep("right", 50, 1), curlRep("left", 60, 2), curlRep("right", 52, 3), curlRep("right", 90, 4), curlRep("right", 51, 5), curlRep("left", 61, 6)];
+    const chosen = goldenRepsPerArm(reps, curl, 3);
+    // Right: 50, 52 and the outlier 90 (the fourth, 51, comes too late); 52 is closest to the other two.
+    expect(chosen.right).toBe(reps[2].samples);
+    expect(chosen.left).toBeUndefined();
+  });
+
+  it("keeps collecting while an arm still lacks reps and has done one recently", () => {
+    const wait = 20000;
+    const reps = [curlRep("right", 50, 3000), curlRep("right", 50, 6000), curlRep("right", 50, 9000)];
+    // Right is done; left has done nothing, so it is waited for until 20 s after recording started.
+    expect(collectingGoldenReps(reps, 0, 10000, 3, wait)).toBe(true);
+    expect(collectingGoldenReps(reps, 0, 20000, 3, wait)).toBe(false);
+    // A left rep at 19 s restarts the wait for the left arm.
+    const withLeft = [...reps, curlRep("left", 50, 19000)];
+    expect(collectingGoldenReps(withLeft, 0, 25000, 3, wait)).toBe(true);
+    expect(collectingGoldenReps(withLeft, 0, 39000, 3, wait)).toBe(false);
+    // Both arms done: stop at once.
+    const both = [...reps, curlRep("left", 50, 10000), curlRep("left", 50, 11000), curlRep("left", 50, 12000)];
+    expect(collectingGoldenReps(both, 0, 12000, 3, wait)).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 // Golden reps live in the browser's localStorage, one per exercise and scorer. They never leave the device.
 //
 // Two formats sit side by side under separate keys: v2 for the position scorer (formScoring.ts) and
-// v3 for the angle scorer (angleScoring.ts). Each scorer reads and writes only its own key, so a v2
+// v3, one per arm, for the angle scorer (angleScoring.ts). Each scorer reads and writes only its own key, so a v2
 // golden rep is never deleted or overwritten and the position scorer behind ?scorer=position keeps working.
 
 import type { Side } from "./exercises";
@@ -77,7 +77,10 @@ export interface AngleGoldenRep {
   track: PoseTrack;
 }
 
-const angleKey = (exerciseName: string) => `form-trainer:golden:v3:${exerciseName}`;
+/** One golden rep per arm. */
+const angleKey = (exerciseName: string, side: Side) => `form-trainer:golden:v3:${exerciseName}:${side}`;
+/** Where v3 golden reps were kept before there was one per arm; still read, as a fallback for its own arm, and never deleted. */
+const singleAngleKey = (exerciseName: string) => `form-trainer:golden:v3:${exerciseName}`;
 
 /** Parse a stored v3 golden rep, returning null for anything missing or malformed. */
 export function parseAngleGolden(json: string | null): AngleGoldenRep | null {
@@ -101,11 +104,15 @@ export function parseAngleGolden(json: string | null): AngleGoldenRep | null {
   return wellFormed ? { side, track: track as PoseTrack } : null;
 }
 
-export function loadAngleGolden(exerciseName: string): AngleGoldenRep | null {
-  return load(angleKey(exerciseName), parseAngleGolden);
+/** One arm's golden rep for the angle scorer, or null if that arm has none. */
+export function loadAngleGolden(exerciseName: string, side: Side): AngleGoldenRep | null {
+  const own = load(angleKey(exerciseName, side), parseAngleGolden);
+  if (own?.side === side) return own;
+  const single = load(singleAngleKey(exerciseName), parseAngleGolden);
+  return single?.side === side ? single : null;
 }
 
-/** Returns false if the browser refused to store it; the rep still works for this visit. */
+/** Stores the golden rep for its own arm, leaving the other arm's. Returns false if the browser refused; the rep still works for this visit. */
 export function saveAngleGolden(exerciseName: string, golden: AngleGoldenRep): boolean {
-  return save(angleKey(exerciseName), golden);
+  return save(angleKey(exerciseName, golden.side), golden);
 }

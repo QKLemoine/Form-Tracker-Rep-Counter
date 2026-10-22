@@ -1,7 +1,7 @@
 // The page: camera, drawing and controls. All tracking decisions live in tracking.ts.
 
 import { DrawingUtils, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
-import { angleFrames, angleMatchPercent, angleRepDistance } from "./angleScoring";
+import { angleFrames, angleMatchPercent, angleRepDistance, collectingGoldenReps, goldenRepsPerArm, type CollectedRep } from "./angleScoring";
 import { DEFAULT_CALIBRATION_CONFIG } from "./calibration";
 import { DEFAULT_EXERCISE, EXERCISES, SIDES, type AngleRange, type Side } from "./exercises";
 import { matchPercent, mostTypicalRep, repDistance, torsoSwing } from "./formScoring";
@@ -9,11 +9,11 @@ import { PoseDetector, type Pose } from "./pose";
 import { mediapipeHeader } from "./poseTrack";
 import { RECORDED_LANDMARKS, recordFrame, round, type LandmarkRecording, type RecordedFrame } from "./recording";
 import { loadAngleGolden, loadGolden, saveAngleGolden, saveGolden, type AngleGoldenRep, type GoldenRep } from "./storage";
-import { MotionTracker, type RepSample, type SideSnapshot } from "./tracking";
+import { MotionTracker, type SideSnapshot } from "./tracking";
 
 /** Time to step back from the phone before recording or calibrating starts. */
 const COUNTDOWN_MS = 5000;
-/** Good reps a golden rep is chosen from; the most typical one is kept, so one sloppy rep can't become the reference. */
+/** Good reps a golden rep is chosen from (per arm, for the angle scorer); the most typical one is kept, so one sloppy rep can't become the reference. */
 const GOLDEN_REPS = 3;
 /** Landmark recordings stop by themselves after this long. */
 const MAX_LANDMARK_RECORDING_MS = 60000;
@@ -61,10 +61,10 @@ const drawing = new DrawingUtils(ctx);
  * the golden rep, or relearning each side's range from its next good reps (calibrate).
  */
 type Session =
-  | { kind: "golden"; armAt: number; armed: boolean; reps: { side: Side; samples: RepSample[] }[] }
+  | { kind: "golden"; armAt: number; armed: boolean; reps: CollectedRep[] }
   | { kind: "calibrate"; armAt: number; armed: boolean };
 
-/** If a side shows no good rep this long into calibrating, it is out of view or not exercising; stop waiting for it. */
+/** If a side shows no good rep this long into calibrating or recording golden reps, it is out of view or not exercising; stop waiting for it. */
 const CALIBRATION_WAIT_MS = 20000;
 
 let exercise = EXERCISES[DEFAULT_EXERCISE];
@@ -75,9 +75,13 @@ const noDistances = (): Record<Side, Record<Scorer, number | null>> => ({ left: 
 let lastDistance = noDistances();
 /** The position scorer's golden rep (stored as v2). */
 let golden: GoldenRep | null = loadGolden(exercise.name);
-/** The angle scorer's golden rep (stored as v3). */
-let angleGolden: AngleGoldenRep | null = loadAngleGolden(exercise.name);
-const hasGolden = () => (scorer === "angle" ? angleGolden : golden) !== null;
+const loadAngleGoldens = (name: string): Record<Side, AngleGoldenRep | null> => ({ left: loadAngleGolden(name, "left"), right: loadAngleGolden(name, "right") });
+/** The angle scorer's golden rep for each arm (stored as v3). */
+let angleGoldens = loadAngleGoldens(exercise.name);
+/** Which arm's golden rep each side's last rep was scored against: its own, or the other arm's when it has none. */
+let angleScoredAgainst: Record<Side, Side | null> = { left: null, right: null };
+const otherSide = (side: Side): Side => (side === "left" ? "right" : "left");
+const hasGolden = () => (scorer === "angle" ? SIDES.some((side) => angleGoldens[side]) : golden !== null);
 const percentFor = (kind: Scorer, distance: number) => (kind === "angle" ? angleMatchPercent(distance) : matchPercent(distance));
 let session: Session | null = null;
 let notice: { text: string; until: number } | null = null;
@@ -182,27 +186,46 @@ function startSession(kind: Session["kind"]): void {
   renderHud();
 }
 
-/** Keep the most typical of the reps as the active scorer's golden rep. The other scorer's golden rep is left as it is. */
-function finishGolden(reps: { side: Side; samples: RepSample[] }[]): void {
-  let side: Side;
-  let stored: boolean;
-  if (scorer === "angle") {
-    const chosen = reps[mostTypicalRep(reps.map((rep) => angleFrames(rep.samples.map((s) => s.pose), exercise, rep.side)), angleRepDistance)];
-    const startedAt = chosen.samples[0].pose.t;
-    const frames = chosen.samples.map(({ pose }) => ({ ...pose, t: round(pose.t - startedAt, 1) }));
-    side = chosen.side;
-    angleGolden = { side, track: { ...mediapipeHeader(POSE_SOURCE, exercise.name, false), frames } };
-    stored = saveAngleGolden(exercise.name, angleGolden);
-  } else {
-    const chosen = reps[mostTypicalRep(reps.map((rep) => rep.samples.map((s) => s.position)))];
-    side = chosen.side;
-    golden = { side, frames: chosen.samples.map((s) => s.position) };
-    stored = saveGolden(exercise.name, golden);
-  }
+const notStored = (stored: boolean) => (stored ? "" : " (this visit only: the browser blocked storage)");
+
+/** Position scorer: keep the most typical of the reps, from either arm, as its one golden rep. The angle scorer's are left as they are. */
+function finishPositionGolden(reps: CollectedRep[]): void {
+  const chosen = reps[mostTypicalRep(reps.map((rep) => rep.samples.map((s) => s.position)))];
+  golden = { side: chosen.side, frames: chosen.samples.map((s) => s.position) };
+  const stored = saveGolden(exercise.name, golden);
   session = null;
   // Earlier scores were against the previous golden rep.
   lastDistance = noDistances();
-  showNotice(`Golden rep saved: the most typical of your ${reps.length} reps, from your ${side} side${stored ? "" : " (this visit only: the browser blocked storage)"}`);
+  showNotice(`Golden rep saved: the most typical of your ${reps.length} reps, from your ${chosen.side} side${notStored(stored)}`);
+}
+
+/**
+ * Angle scorer: for each arm with enough good reps, keep the most typical as that arm's golden rep.
+ * An arm without enough keeps the golden rep it had. The position scorer's is left as it is.
+ */
+function finishAngleGoldens(reps: CollectedRep[]): void {
+  session = null;
+  const chosen = goldenRepsPerArm(reps, exercise, GOLDEN_REPS);
+  const saved = SIDES.filter((side) => chosen[side]);
+  if (saved.length === 0) {
+    showNotice(`No golden rep saved: neither arm did ${GOLDEN_REPS} good full reps`, 8000);
+    return;
+  }
+  let stored = true;
+  for (const side of saved) {
+    const samples = chosen[side]!;
+    const startedAt = samples[0].pose.t;
+    const frames = samples.map(({ pose }) => ({ ...pose, t: round(pose.t - startedAt, 1) }));
+    const rep: AngleGoldenRep = { side, track: { ...mediapipeHeader(POSE_SOURCE, exercise.name, false), frames } };
+    angleGoldens[side] = rep;
+    stored = saveAngleGolden(exercise.name, rep) && stored;
+  }
+  lastDistance = noDistances();
+  let text = `Golden rep saved for your ${saved.join(" and ")} arm${saved.length > 1 ? "s" : ""}`;
+  for (const side of SIDES.filter((s) => !chosen[s])) {
+    text += `; ${side} arm: fewer than ${GOLDEN_REPS} good reps, ${angleGoldens[side] ? "kept its earlier golden rep" : `scored against your ${otherSide(side)} arm's`}`;
+  }
+  showNotice(text + notStored(stored), 8000);
 }
 
 const describeRange = ([rest, top]: AngleRange) => `${Math.round(rest)}°→${Math.round(top)}°`;
@@ -241,15 +264,21 @@ function handleSnapshots(snaps: Record<Side, SideSnapshot>, now: number): void {
         showNotice(`${capitalized(side)} rep not used for the golden rep: body swing`);
         continue;
       }
-      session.reps.push({ side, samples: rep });
-      if (session.reps.length >= GOLDEN_REPS) finishGolden(session.reps);
+      session.reps.push({ side, samples: rep, at: now });
+      if (scorer === "position" && session.reps.length >= GOLDEN_REPS) finishPositionGolden(session.reps);
     } else {
       if (golden) lastDistance[side].position = repDistance(golden.frames, rep.map((s) => s.position));
-      if (angleGolden) {
-        const goldenAngles = angleFrames(angleGolden.track.frames, exercise, angleGolden.side);
+      const reference = angleGoldens[side] ?? angleGoldens[otherSide(side)];
+      if (reference) {
+        const goldenAngles = angleFrames(reference.track.frames, exercise, reference.side);
         lastDistance[side].angle = angleRepDistance(goldenAngles, angleFrames(rep.map((s) => s.pose), exercise, side));
+        angleScoredAgainst[side] = reference.side;
       }
     }
+  }
+  // Golden reps for the angle scorer are done once each arm has enough, or has shown no good rep for a while.
+  if (session?.kind === "golden" && session.armed && scorer === "angle" && !collectingGoldenReps(session.reps, session.armAt, now, GOLDEN_REPS, CALIBRATION_WAIT_MS)) {
+    finishAngleGoldens(session.reps);
   }
   // Calibrating is done once every side has its range, or has shown no good rep for a while.
   if (session?.kind === "calibrate" && session.armed) {
@@ -296,6 +325,11 @@ function statusText(tracking: boolean, now: number): string {
     SIDES.filter((side) => snapshots?.[side].calibrationProgress)
       .map((side) => `${side} ${snapshots![side].calibrationProgress!.reps}/${snapshots![side].calibrationProgress!.needed}`)
       .join(", ");
+  if (session?.kind === "golden" && scorer === "angle") {
+    const collected = session.reps;
+    const counts = SIDES.map((side) => `${side} ${Math.min(GOLDEN_REPS, collected.filter((rep) => rep.side === side).length)}/${GOLDEN_REPS}`);
+    return `Recording golden reps — do ${GOLDEN_REPS} good full reps with each arm (${counts.join(", ")})`;
+  }
   if (session?.kind === "golden") return `Recording golden rep — do ${GOLDEN_REPS} good full reps (${session.reps.length}/${GOLDEN_REPS})`;
   if (session?.kind === "calibrate") return `Calibrating — do ${DEFAULT_CALIBRATION_CONFIG.repsNeeded} slow full reps, arms straight to fully curled (${progress()})`;
   if (notice && now < notice.until) return notice.text;
@@ -311,11 +345,12 @@ function renderDebug(): void {
   const score = (side: Side, kind: Scorer) => {
     const distance = lastDistance[side][kind];
     if (distance === null) return "–";
-    return `${percentFor(kind, distance)}% (${kind === "angle" ? `${distance.toFixed(1)}°` : distance.toFixed(3)})`;
+    const against = kind === "angle" && angleScoredAgainst[side] !== side ? `, vs ${angleScoredAgainst[side]} arm` : "";
+    return `${percentFor(kind, distance)}% (${kind === "angle" ? `${distance.toFixed(1)}°` : distance.toFixed(3)}${against})`;
   };
   const lines = [
     `${frameIntervalMs ? (1000 / frameIntervalMs).toFixed(0) : "–"} fps   ${detector?.delegate ?? "–"}   video ${video.videoWidth}x${video.videoHeight}   ${facingMode === "user" ? "front" : "back"} camera`,
-    `scorer ${scorer} · golden angle ${angleGolden?.side ?? "none"}, position ${golden?.side ?? "none"}`,
+    `scorer ${scorer} · golden angle ${SIDES.filter((side) => angleGoldens[side]).join("+") || "none"}, position ${golden?.side ?? "none"}`,
   ];
   for (const side of SIDES) {
     const snap = snapshots?.[side];
@@ -425,7 +460,7 @@ exerciseSelect.addEventListener("change", () => {
   snapshots = null;
   lastDistance = noDistances();
   golden = loadGolden(exercise.name);
-  angleGolden = loadAngleGolden(exercise.name);
+  angleGoldens = loadAngleGoldens(exercise.name);
   session = null;
   renderHud();
 });
