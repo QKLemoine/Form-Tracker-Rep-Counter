@@ -26,3 +26,13 @@ spike_result*.json
 body_models/
 SMPL*.pkl
 SMPLX*.npz
+
+# Model checkpoints (e.g. GVHMR's) and videos anywhere, not only in videos/: video stays on the device
+*.ckpt
+*.pth
+*.pt
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.m4v
